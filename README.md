@@ -22,7 +22,7 @@
 
 **HEAV3NS-Publishing** is a full-stack creator economy and content monetization platform engineered for speed, cryptographic paywall integrity, and zero-dependency deployment.
 
-Originally conceived as a server-rendered PHP/Laravel + jQuery application, **HEAV3NS-Publishing** has been completely re-architected into a modern two-tier stack:
+It is architected as a modern two-tier stack:
 1. **Rust Backend (`backend/`)**: A memory-safe **Axum 0.7 + Tokio** HTTP server backed by embedded **SQLite in Write-Ahead Logging (WAL)** mode (`rusqlite`), enforcing server-side paywall redaction, PII masking, and `BEGIN IMMEDIATE` financial ledger transactions across 23 relational tables and 60+ REST endpoints.
 2. **Next.js 16 Frontend (`frontend/`)**: A responsive **Next.js 16.4.3 (App Router + Turbopack) + React 19.3.1 + TypeScript** web application featuring a global `⌘K` Command Palette, dark/light theme persistence, real-time creator feeds, short-form Reels, 24h Stories, HLS Live Streaming, and a 1-on-1 & broadcast Direct Messenger.
 
@@ -151,7 +151,7 @@ On initial startup, [`backend/src/db.rs`](./backend/src/db.rs) seeds 4 ready-to-
 | `PORT` | `backend` | `8080` | TCP port the Axum HTTP server binds to (`0.0.0.0:$PORT`) |
 | `DATABASE_URL` | `backend` | `justfans.sqlite` | File path for the embedded SQLite WAL database (`:memory:` in tests) |
 | `UPLOADS_DIR` | `backend` | `uploads` | Directory where uploaded media files are stored and served at `/uploads/*` |
-| `PUBLIC_DIR` | `backend` | `../public` | Static assets directory served at `/img/*`, `/css/*`, `/fonts/*` |
+| `PUBLIC_DIR` | `backend` | `../frontend/public` | Static assets directory served at `/img/*`, `/css/*`, `/fonts/*` |
 | `JWT_SECRET` | `backend` | `justfans-super-secret-jwt-key-2026-rust-edition` | HMAC-SHA256 secret key used to sign and verify stateless JWTs |
 | `BACKEND_URL` | `frontend` | `http://127.0.0.1:8080` | Upstream Rust API origin proxied by [`frontend/next.config.mjs`](./frontend/next.config.mjs) |
 
@@ -185,7 +185,7 @@ Our [`docs/`](./docs/README.md) directory contains comprehensive architecture re
   - [Database Schema & ER Diagram (23 Tables)](./docs/architecture/database-schema.md)
   - [Complete REST API Reference (60+ Endpoints)](./docs/api/api-reference.md)
 - **Architecture Decision Records (ADRs)**:
-  - [ADR-001: Migration from Legacy Monolith to Rust (Axum) & Next.js](./docs/adr/001-rust-axum-and-nextjs-migration.md)
+  - [ADR-001: Decoupled Rust (Axum) & Next.js 16 Two-Tier Architecture](./docs/adr/001-rust-axum-and-nextjs-migration.md)
   - [ADR-002: Embedded SQLite with WAL Mode and Mutex-Synchronized State](./docs/adr/002-sqlite-wal-and-state-management.md)
   - [ADR-003: Dual-Channel Stateless JWT Authentication & Optional Extractor Pattern](./docs/adr/003-dual-channel-jwt-authentication.md)
   - [ADR-004: Server-Side Paywall Enforcement & Privacy Redaction at the Serialization Boundary](./docs/adr/004-server-side-paywall-and-privacy-masking.md)

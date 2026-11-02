@@ -1,1 +1,0 @@
-GIPHY attribution mark from the official archive linked by https://developers.giphy.com/docs/api/: https://media.giphy.com/giphy-attribution-marks.zip. Used unchanged. GIPHY trademarks belong to their respective owners.

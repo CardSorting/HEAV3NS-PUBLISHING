@@ -1,4 +1,0 @@
-.file-attachment-details { flex: 1; min-width: 0; }
-.file-attachment-name,
-.file-preview-name { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
-.file-attachment-card > .btn { display: inline-flex; align-items: center; min-height: 2.75rem; white-space: nowrap; }

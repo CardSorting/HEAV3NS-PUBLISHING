@@ -8,7 +8,7 @@ backend/*.db-shm
 backend/*.db-wal
 backend/uploads/
 
-# Next.js Frontend
+# Next.js 16 Frontend
 frontend/node_modules/
 frontend/.next/
 frontend/out/
@@ -16,12 +16,8 @@ frontend/build/
 frontend/.env*.local
 frontend/next-env.d.ts
 
-# Legacy / Root dependencies & build artifacts
-/node_modules/
-/vendor/
-/storage/*.key
-/storage/logs/
+# Environment & OS files
 .env
 .DS_Store
 *.log
-
+backups/

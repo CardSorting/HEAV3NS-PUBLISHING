@@ -7,8 +7,7 @@ Only the latest release branch (`main`, v2.x) of **HEAV3NS-Publishing** actively
 | Version | Stack | Supported |
 | :--- | :--- | :--- |
 | **2.0.x (`main`)** | Rust (Axum 0.7 + SQLite WAL) & Next.js 16.4 (React 19) | ✅ Yes |
-| **1.0.x** | Rust (Axum 0.7) & Next.js 14 | ⚠️ Upgrade to `2.0.x` recommended |
-| **< 1.0 (Legacy PHP/Laravel)** | PHP 8 / Laravel / jQuery | ❌ End-of-Life (Deprecated) |
+| **1.0.x** | Rust (Axum 0.7 + SQLite WAL) & Next.js 14 | ⚠️ Upgrade to `2.0.x` recommended |
 
 ---
 

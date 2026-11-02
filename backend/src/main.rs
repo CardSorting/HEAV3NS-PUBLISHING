@@ -150,7 +150,7 @@ async fn main() {
 
     let db_path = std::env::var("DATABASE_PATH").unwrap_or_else(|_| "justfans.sqlite".into());
     let uploads_dir = std::env::var("UPLOADS_DIR").unwrap_or_else(|_| "./uploads".into());
-    let public_dir = std::env::var("PUBLIC_DIR").unwrap_or_else(|_| "../public".into());
+    let public_dir = std::env::var("PUBLIC_DIR").unwrap_or_else(|_| "../frontend/public".into());
     let port: u16 = std::env::var("PORT")
         .ok()
         .and_then(|p| p.parse().ok())
@@ -189,7 +189,7 @@ mod tests {
         let state = AppState {
             db: Arc::new(Mutex::new(conn)),
             uploads_dir: tmp_dir.to_string_lossy().to_string(),
-            public_dir: "../public".to_string(),
+            public_dir: "../frontend/public".to_string(),
         };
         build_app(state)
     }

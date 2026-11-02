@@ -35,7 +35,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [1.0.0] - 2026-11-01
 
 ### Added
-- **Full-Stack Rust & Next.js Conversion**: Migrated the legacy PHP/Laravel + jQuery monolith into a decoupled **Rust (Axum 0.7 + SQLite WAL)** backend (`backend/`) and **Next.js (App Router + TypeScript)** frontend (`frontend/`).
+- **Full-Stack Rust & Next.js Architecture**: Initial release of the decoupled **Rust (Axum 0.7 + SQLite WAL)** backend (`backend/`) and **Next.js (App Router + TypeScript)** frontend (`frontend/`).
 - **Core Creator Monetization Suite**:
   - 1/3/6/12-month creator subscriptions, PPV post unlocks, PPV message unlocks, PPV live stream unlocks, and creator tips with an 85% creator / 15% platform revenue split.
   - Creator wallet ledger, printable tax invoices (`/invoices/[id]`), and withdrawal escrow/refund workflows.

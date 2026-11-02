@@ -13,7 +13,7 @@ Welcome to the engineering documentation and operational knowledge base for **HE
 - **[REST API Reference](./api/api-reference.md)** — Complete endpoint catalog across all 60+ routes, request/response JSON contracts, authentication requirements, and HTTP status codes.
 
 ### 2. Architecture Decision Records (ADRs)
-- **[ADR-001: Migration from Legacy Monolith to Rust (Axum) & Next.js](./adr/001-rust-axum-and-nextjs-migration.md)**
+- **[ADR-001: Decoupled Rust (Axum) & Next.js 16 Two-Tier Architecture](./adr/001-rust-axum-and-nextjs-migration.md)**
 - **[ADR-002: Embedded SQLite (`rusqlite`) with WAL Mode & Mutex State Serialization](./adr/002-sqlite-wal-and-state-management.md)**
 - **[ADR-003: Dual-Channel Stateless JWT Authentication (`Bearer` + `HttpOnly` Cookie)](./adr/003-dual-channel-jwt-authentication.md)**
 - **[ADR-004: Server-Side Paywall Enforcement & Public Profile Field Masking](./adr/004-server-side-paywall-and-privacy-masking.md)**
