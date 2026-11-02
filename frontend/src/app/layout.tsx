@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import { AuthProvider } from '@/context/AuthContext';
 
 export const metadata: Metadata = {
-  title: 'JustFans - Premium Content Creators SaaS Platform',
+  title: 'HEAV3NS-Publishing — Premium Creator Monetization Platform',
   description:
     'Launch a premium content platform with subscriptions, PPV posts, direct engagement, discovery, and growth tools.',
 };

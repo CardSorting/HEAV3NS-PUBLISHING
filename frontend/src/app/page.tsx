@@ -97,7 +97,7 @@ export default function HomePage() {
           <Link href="/" className="d-flex align-items-center gap-2 text-decoration-none">
             <img
               src={darkMode ? '/img/logo-white.png' : '/img/logo-black.png'}
-              alt="JustFans"
+              alt="HEAV3NS-Publishing"
               style={{ height: 36 }}
             />
           </Link>
@@ -299,7 +299,7 @@ export default function HomePage() {
       {/* Footer */}
       <footer className="py-4 border-top mt-auto bg-body">
         <div className="container d-flex flex-wrap justify-content-between align-items-center small text-muted">
-          <div>© {new Date().getFullYear()} JustFans — Rust + Next.js Platform.</div>
+          <div>© {new Date().getFullYear()} HEAV3NS-Publishing — Rust + Next.js Platform.</div>
           <div className="d-flex gap-3">
             <Link href="/pages/terms-and-conditions" className="text-muted text-decoration-none">
               Terms

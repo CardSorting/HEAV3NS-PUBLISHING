@@ -95,7 +95,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <Link href="/" className="text-decoration-none d-flex align-items-center gap-2">
           <img
             src={darkMode ? '/img/logo-white.png' : '/img/logo-black.png'}
-            alt="JustFans"
+            alt="HEAV3NS-Publishing"
             style={{ height: '28px', objectFit: 'contain' }}
           />
         </Link>
@@ -137,7 +137,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <Link href="/" className="text-decoration-none d-flex align-items-center gap-2">
                   <img
                     src={darkMode ? '/img/logo-white.png' : '/img/logo-black.png'}
-                    alt="JustFans"
+                    alt="HEAV3NS-Publishing"
                     style={{ height: '32px', objectFit: 'contain' }}
                   />
                 </Link>

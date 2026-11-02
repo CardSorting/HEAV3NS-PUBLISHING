@@ -642,7 +642,7 @@ fn seed_db(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute(
         "INSERT INTO public_pages (slug, title, short_title, content)
          VALUES
-         ('terms-and-conditions', 'Terms and Conditions', 'Terms of Use', '<h3>1. Platform Terms of Service</h3><p>Welcome to JustFans. By accessing our platform, you agree to comply with creator monetization standards, age verification policies (18+), and intellectual property guidelines.</p><h3>2. Subscriptions & Creator Monetization</h3><p>Creators retain 85% of all subscription, pay-per-view (PPV), and tip earnings. Subscriptions renew automatically unless cancelled prior to the billing date.</p>'),
+         ('terms-and-conditions', 'Terms and Conditions', 'Terms of Use', '<h3>1. Platform Terms of Service</h3><p>Welcome to HEAV3NS-Publishing. By accessing our platform, you agree to comply with creator monetization standards, age verification policies (18+), and intellectual property guidelines.</p><h3>2. Subscriptions & Creator Monetization</h3><p>Creators retain 85% of all subscription, pay-per-view (PPV), and tip earnings. Subscriptions renew automatically unless cancelled prior to the billing date.</p>'),
          ('privacy', 'Privacy Policy', 'Privacy Policy', '<h3>1. Data Protection & Privacy</h3><p>We take your privacy seriously. All personal data, payment records, and private messages are encrypted and never sold to third parties.</p><h3>2. Cookie & Session Security</h3><p>We use strictly necessary authentication tokens and optional analytics preferences that you control.</p>'),
          ('help', 'Help & Creator FAQ', 'Help Center', '<h3>How do I start earning as a creator?</h3><p>Go to Settings → Rates to set your monthly subscription bundle prices, or create Pay-Per-View (PPV) posts and locked messages directly from the composer.</p><h3>How do payouts work?</h3><p>Navigate to Settings → Wallet → Withdraw to request an instant payout via Bank Transfer, Stripe Connect, or PayPal.</p>')",
         [],
@@ -651,7 +651,7 @@ fn seed_db(conn: &Connection) -> Result<(), rusqlite::Error> {
     // Seed Settings
     conn.execute(
         "INSERT INTO settings (key, value) VALUES
-         ('site.name', 'JustFans'),
+         ('site.name', 'HEAV3NS-Publishing'),
          ('site.slogan', 'Premium Content Creators SaaS Platform'),
          ('site.description', 'Launch a premium content platform with subscriptions, PPV posts, direct messenger, reels, stories, and live streaming.'),
          ('feed.min_post_description', '0'),

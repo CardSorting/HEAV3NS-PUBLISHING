@@ -50,7 +50,7 @@ export default function LoginPage() {
             <Link href="/" className="d-inline-block mb-4">
               <img
                 src={darkMode ? '/img/logo-white.png' : '/img/logo-black.png'}
-                alt="JustFans"
+                alt="HEAV3NS-Publishing"
                 style={{ height: 42 }}
               />
             </Link>

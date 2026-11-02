@@ -1,6 +1,6 @@
 # Knowledge Base & Domain Reference
 
-This document captures the institutional knowledge, domain vocabulary, business invariants, and codebase map for **JustFans (HEAV3NS-PUBLISHING)**.
+This document captures the institutional knowledge, domain vocabulary, business invariants, and codebase map for **HEAV3NS-Publishing**.
 
 ---
 

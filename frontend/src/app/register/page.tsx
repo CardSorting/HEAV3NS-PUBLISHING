@@ -53,13 +53,13 @@ export default function RegisterPage() {
             <Link href="/" className="d-inline-block mb-4">
               <img
                 src={darkMode ? '/img/logo-white.png' : '/img/logo-black.png'}
-                alt="JustFans"
+                alt="HEAV3NS-Publishing"
                 style={{ height: 42 }}
               />
             </Link>
             <h2 className="fw-bold mb-1">Create your account</h2>
             <p className="text-muted mb-4">
-              Join JustFans and receive $100.00 in welcome wallet credits to explore creators.
+              Join HEAV3NS-Publishing and receive $100.00 in welcome wallet credits to explore creators.
             </p>
 
             {error && <div className="alert alert-danger py-2 small">{error}</div>}

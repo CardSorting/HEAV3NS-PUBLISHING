@@ -167,7 +167,7 @@ async fn main() {
 
     let app = build_app(state);
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
-    tracing::info!("JustFans Rust Backend listening on http://{}", addr);
+    tracing::info!("HEAV3NS-Publishing Rust Backend listening on http://{}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();

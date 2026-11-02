@@ -22,8 +22,8 @@ use crate::{
 pub async fn health_check() -> impl IntoResponse {
     Json(json!({
         "status": "ok",
-        "service": "justfans-rust-backend",
-        "version": "1.0.0"
+        "service": "heav3ns-publishing-rust-backend",
+        "version": "2.0.0"
     }))
 }
 
@@ -55,7 +55,7 @@ pub async fn get_home_data(
     Ok(Json(json!({
         "success": true,
         "site": {
-            "name": "JustFans",
+            "name": "HEAV3NS-Publishing",
             "slogan": "Premium Content Creators SaaS Platform",
             "description": "Launch a premium content platform that feels polished from day one, with subscriptions, direct engagement, discovery, and growth tools."
         },

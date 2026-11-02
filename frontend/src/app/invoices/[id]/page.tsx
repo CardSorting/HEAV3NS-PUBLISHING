@@ -58,7 +58,7 @@ export default function InvoicePage() {
                 <h3 className="fw-bold mb-1">
                   INVOICE #{invoice?.invoice_id || invoiceId}
                 </h3>
-                <div className="small text-muted">JustFans Creator Platform Inc.</div>
+                <div className="small text-muted">HEAV3NS-Publishing Inc.</div>
               </div>
               <span className="badge bg-success px-3 py-2 text-uppercase">
                 {invoice?.status || 'PAID'}
