@@ -86,3 +86,34 @@ Verify TypeScript types and Next.js static/dynamic route compilation:
 cd frontend
 npm run build
 ```
+
+---
+
+## Documentation & Engineering Knowledge Base
+
+Comprehensive architecture documentation, domain knowledge base, API specifications, Architecture Decision Records (ADRs), Operational Playbooks, and Engineering Post-Mortems are located in [`docs/`](./docs/README.md):
+
+- **Documentation Hub**: [`docs/README.md`](./docs/README.md)
+- **Knowledge Base & Domain Reference**: [`docs/knowledge-base/overview.md`](./docs/knowledge-base/overview.md)
+- **Architecture & Schema**:
+  - [System Architecture & Data Flows](./docs/architecture/system-architecture.md)
+  - [Database Schema & ER Diagram (21 Tables)](./docs/architecture/database-schema.md)
+- **REST API Reference**: [Complete Endpoint Reference (`45+` Routes)](./docs/api/api-reference.md)
+- **Architecture Decision Records (ADRs)**:
+  - [ADR-001: Migration from Legacy PHP/Laravel to Rust (Axum) & Next.js 14](./docs/adr/001-rust-axum-and-nextjs-migration.md)
+  - [ADR-002: Embedded SQLite with WAL Mode and Mutex-Synchronized State](./docs/adr/002-sqlite-wal-and-state-management.md)
+  - [ADR-003: Dual-Channel Stateless JWT Authentication & Optional Extractor Pattern](./docs/adr/003-dual-channel-jwt-authentication.md)
+  - [ADR-004: Server-Side Paywall Enforcement & Privacy Redaction at the Serialization Boundary](./docs/adr/004-server-side-paywall-and-privacy-masking.md)
+  - [ADR-005: Unified Payment Ledger, Authoritative Pricing & 85/15 Creator Revenue Split](./docs/adr/005-unified-payment-ledger-and-creator-split.md)
+- **Operational Playbooks**:
+  - [Playbook 001: Local Development, Startup & Full-Stack Verification](./docs/playbooks/001-local-development-and-startup.md)
+  - [Playbook 002: Database Backup, Restore, Inspection & Clean Re-Seeding](./docs/playbooks/002-database-backup-restore-and-seeding.md)
+  - [Playbook 003: Payment, Wallet & Creator Payout Reconciliation](./docs/playbooks/003-payment-and-payout-reconciliation.md)
+  - [Playbook 004: Content Moderation & Creator Identity Verification](./docs/playbooks/004-moderation-and-creator-verification.md)
+  - [Playbook 005: Security Incident Response & Paywall Audit](./docs/playbooks/005-security-incident-and-paywall-audit.md)
+- **Engineering Post-Mortems**:
+  - [PM-001: Subscription Price Spoofing & Duplicate PPV Unlock Charges](./docs/post-mortems/001-subscription-price-spoofing-and-ppv-double-charge.md)
+  - [PM-002: Locked Post Cleartext Metadata, VIP Stream HLS & Public Profile PII Exposure](./docs/post-mortems/002-locked-post-and-stream-paywall-data-leak.md)
+  - [PM-003: Cross-Poll Vote Corruption & Vault Attachment Row Duplication](./docs/post-mortems/003-poll-vote-corruption-and-attachment-duplication.md)
+  - [PM-004: Frontend-Backend Contract Mismatches & Pre-Filter Feed Pagination](./docs/post-mortems/004-frontend-backend-contract-and-pagination-mismatches.md)
+
