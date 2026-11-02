@@ -172,3 +172,4 @@ The backend test suite in [`backend/src/main.rs`](../../backend/src/main.rs) exe
 | `test_security_and_regression_fixes` | Subscription price spoofing prevention, duplicate PPV unlock rejection, cross-poll vote rejection, and withdrawal rejection refunds. |
 | `test_edge_cases_and_error_paths` | Insufficient wallet balance handling, self-subscription rejection, minimum `$20.00` withdrawal validation, and unauthorized access checks. |
 | `test_deep_hardening_and_parity_features` | Promotional `creator_offers`, scheduled/expiring posts, poll vote preservation on post edit, PPV messages & PPV reels (`provider: "wallet"`), story highlights & views, bidirectional blocking, referrals, and vault archiving. |
+

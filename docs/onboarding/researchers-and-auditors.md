@@ -64,3 +64,4 @@ Review how previous vulnerabilities were discovered, analyzed, patched, and regr
 ## 5. Coordinated Vulnerability Disclosure
 
 If you discover a security vulnerability or invariant bypass, please follow the private reporting instructions in **[`SECURITY.md`](../../SECURITY.md)**.
+

@@ -102,3 +102,4 @@ All day-to-day operational procedures are documented in step-by-step runbooks un
 
 - **Current Single-Node Capacity**: The embedded SQLite WAL engine with `BEGIN IMMEDIATE` transactions handles thousands of concurrent reads per second and数百 sequential financial writes per second on a single NVMe instance with zero external infrastructure cost.
 - **Horizontal Multi-Node Scaling Trigger**: When platform transaction volume exceeds single-node vertical limits or requires active-active multi-region write replicas, the database layer in [`backend/src/db.rs`](../../backend/src/db.rs) can be migrated to PostgreSQL (`sqlx::PgPool`) and local `backend/uploads/` can be backed by S3/Cloudflare R2 behind a CDN.
+

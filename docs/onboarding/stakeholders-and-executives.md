@@ -33,3 +33,4 @@ Every major technical choice is documented in an **Architecture Decision Record 
 - **[ADR-003: Dual-Channel Stateless JWT Authentication](../adr/003-dual-channel-jwt-authentication.md)** — Supports seamless web browser sessions and future mobile app clients simultaneously.
 - **[ADR-004: Server-Side Paywall Enforcement & Privacy Redaction](../adr/004-server-side-paywall-and-privacy-masking.md)** — Protects creator intellectual property and subscriber PII against network-level scraping.
 - **[ADR-005: Unified Payment Ledger & 85/15 Creator Split](../adr/005-unified-payment-ledger-and-creator-split.md)** — Guarantees tamper-proof pricing and a single auditable financial ledger.
+

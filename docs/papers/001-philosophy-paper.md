@@ -85,3 +85,4 @@ Creator tools should feel as fast and responsive as a professional creative work
 | **"If it is locked, it does not cross the wire."** | Server-side redaction of text, polls, comments, media URLs, and HLS links in [`db.rs`](../../backend/src/db.rs). |
 | **"Zero-config startup, sub-second verification."** | Embedded SQLite WAL + in-memory integration test suites (`8/8` suites in `<0.1s`). |
 | **"Documentation is executable institutional memory."** | Every bug class discovered during engineering audits is immortalized as a Post-Mortem (`docs/post-mortems/`) and a permanent regression test. |
+

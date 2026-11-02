@@ -52,3 +52,4 @@ cd frontend && npm run build
 ```
 
 See **[`CONTRIBUTING.md`](../../CONTRIBUTING.md)** for commit message conventions and PR checklists.
+
