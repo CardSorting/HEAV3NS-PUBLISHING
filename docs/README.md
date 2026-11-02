@@ -1,6 +1,6 @@
 # HEAV3NS-Publishing — Documentation, Papers & Knowledge Base Hub
 
-Welcome to the central engineering, product, and operational knowledge base for **HEAV3NS-Publishing**, an open-source creator monetization platform built with a **Rust (Axum 0.7 + SQLite WAL)** backend and a **Next.js 16.4.3 (App Router + Turbopack + React 19.3.1 + TypeScript)** frontend.
+Welcome to the central engineering, product, and operational knowledge base for **HEAV3NS-Publishing**, an open-source creator monetization & autonomous persona platform built with a **Rust (Axum 0.7 + 9 DDD Bounded Contexts + PostgreSQL & SQLite WAL)** backend and a **Next.js 16.4.3 (App Router + Turbopack + React 19.3.1 + TypeScript)** frontend.
 
 ---
 
@@ -13,27 +13,27 @@ Choose your role below for a tailored reading path and quick-start guide:
 | **🎨 Creators & Platform Operators** | **[Creators & Operators Guide](./onboarding/creators-and-operators.md)** | [PB-001: Local Startup](./playbooks/001-local-development-and-startup.md) · [PB-003: Payout Reconciliation](./playbooks/003-payment-and-payout-reconciliation.md) · [PB-004: KYC & Moderation](./playbooks/004-moderation-and-creator-verification.md) |
 | **🔬 Security Researchers & Auditors** | **[Researchers & Auditors Guide](./onboarding/researchers-and-auditors.md)** | [Technical Whitepaper (`PAPER-003`)](./papers/003-technical-whitepaper.md) · [ADR-004: Paywall & PII Masking](./adr/004-server-side-paywall-and-privacy-masking.md) · [Post-Mortems (`PM-001..004`)](#5-engineering-post-mortems) |
 | **📊 Stakeholders & Executives** | **[Stakeholders & Executives Guide](./onboarding/stakeholders-and-executives.md)** | [Stakeholder Handoff (`PAPER-002`)](./papers/002-stakeholder-handoff.md) · [Philosophy Paper (`PAPER-001`)](./papers/001-philosophy-paper.md) · [Knowledge Base Overview](./knowledge-base/overview.md) |
-| **🤖 AI Agents & Contributors** | **[AI Agents & Contributors Guide](./onboarding/agents-and-contributors.md)** | [ADR-006: MCP & Agent Guardrails](./adr/006-model-context-protocol-and-autonomous-agent-guardrails.md) · [System Architecture](./architecture/system-architecture.md) · [Database Schema (24 Tables)](./architecture/database-schema.md) · [REST & MCP API Reference (70+ Routes)](./api/api-reference.md) |
+| **🤖 AI Agents & Contributors** | **[AI Agents & Contributors Guide](./onboarding/agents-and-contributors.md)** | [ADR-008: DDD Bounded-Context Handlers](./adr/008-ddd-bounded-context-handlers-refactoring.md) · [ADR-007: Sharding & Soft Quotas](./adr/007-postgres-sharding-and-soft-agent-quotas.md) · [ADR-006: MCP & Agent Guardrails](./adr/006-model-context-protocol-and-autonomous-agent-guardrails.md) · [System Architecture](./architecture/system-architecture.md) · [Database Schema (28 Tables)](./architecture/database-schema.md) · [REST & MCP API Reference (75+ Routes)](./api/api-reference.md) |
 
 ---
 
 ## 📜 1. Foundational Project Papers (`docs/papers/`)
 
 - **[PAPER-001: Philosophy Paper — Creator Sovereignty, Cryptographic Entitlement & Zero-Bloat Systems Design](./papers/001-philosophy-paper.md)**
-  - Articulates the four philosophical pillars of HEAV3NS-Publishing: deterministic 85/15 creator economics, serialization-boundary security invariants, local-first mechanical sympathy, and keyboard-first `⌘K` ergonomics.
+  - Articulates the four philosophical pillars of HEAV3NS-Publishing: deterministic 85/15 creator economics, serialization-boundary security invariants, local-first mechanical sympathy with DDD bounded-context modularity, and keyboard-first `⌘K` ergonomics.
 - **[PAPER-002: Stakeholder Handoff & Executive Dossier](./papers/002-stakeholder-handoff.md)**
   - Executive summary of all 6 monetization streams, growth mechanics (promotional offers & referrals), withdrawal escrow/refund governance, trust & safety compliance controls, and day-two operational readiness.
-- **[PAPER-003: Technical Whitepaper — HEAV3NS-Publishing v2.0 Architecture](./papers/003-technical-whitepaper.md)**
-  - Formal mathematical and systems specification covering the two-tier topology, dual-channel HS256 JWT extractors, formal paywall evaluation equations, `BEGIN IMMEDIATE` ACID financial state machine, 24-table schema, and 9-suite verification harness.
+- **[PAPER-003: Technical Whitepaper — HEAV3NS-Publishing v2.5 Architecture](./papers/003-technical-whitepaper.md)**
+  - Formal mathematical and systems specification covering the two-tier topology, 9 DDD bounded-context handler subsystems, dual-channel HS256 JWT + `hp_mcp_*` extractors, formal paywall evaluation equations, `BEGIN IMMEDIATE` ACID financial state machine, 28-table schema, and 11-suite verification harness.
 
 ---
 
 ## 🏗️ 2. Core Architecture, Schema & API Specifications
 
-- **[Knowledge Base & Domain Reference](./knowledge-base/overview.md)** — Domain glossary (Subscriptions, Promotional Offers, PPV Unlocks, Wallets, Streams, Reels, Stories, Referrals, Moderation, MCP Agents), core business invariants, codebase map, and seeded demo accounts.
-- **[System Architecture & Data Flow](./architecture/system-architecture.md)** — End-to-end Mermaid topology diagrams, request lifecycle, Next.js 16 rewrite proxy, authentication extractors, and paywall enforcement model.
-- **[Database Schema & Entity Reference](./architecture/database-schema.md)** — Complete 24-table SQLite relational schema (`agent_tokens`, `agent_audit_logs`, `creator_offers`, etc.), foreign key cascade rules, indexing, and seeded demo state.
-- **[REST & MCP API Reference](./api/api-reference.md)** — Complete endpoint catalog across all 70+ REST and MCP JSON-RPC 2.0 routes, request/response JSON contracts, authentication requirements, and HTTP status codes.
+- **[Knowledge Base & Domain Reference](./knowledge-base/overview.md)** — Domain glossary (Subscriptions, Promotional Offers, PPV Unlocks, Wallets, Streams, Reels, Stories, Referrals, Moderation, MCP Agents, Autonomous Personas), core business invariants, complete 9-domain DDD codebase map, and seeded demo accounts.
+- **[System Architecture & Data Flow](./architecture/system-architecture.md)** — End-to-end Mermaid topology diagrams, DDD bounded-context handler layout, request lifecycle, Next.js 16 rewrite proxy, authentication extractors, and paywall enforcement model.
+- **[Database Schema & Entity Reference](./architecture/database-schema.md)** — Complete 28-table PostgreSQL & SQLite relational schema (`agent_tokens`, `agent_audit_logs`, `agent_quota_buckets`, `agent_action_idempotency`, `agent_personas`, `creator_offers`, etc.), foreign key cascade rules, indexing, and seeded demo state.
+- **[REST & MCP API Reference](./api/api-reference.md)** — Complete endpoint catalog across all 75+ REST and MCP JSON-RPC 2.0 routes mapped to their exact `handlers::<domain>::*` implementation modules, request/response JSON contracts, authentication requirements, and HTTP status codes.
 
 ---
 
@@ -45,6 +45,8 @@ Choose your role below for a tailored reading path and quick-start guide:
 - **[ADR-004: Server-Side Paywall Enforcement & Public Profile Field Masking](./adr/004-server-side-paywall-and-privacy-masking.md)**
 - **[ADR-005: Unified Payment Ledger, Server-Authoritative Pricing & 85/15 Creator Split](./adr/005-unified-payment-ledger-and-creator-split.md)**
 - **[ADR-006: Model Context Protocol (MCP) & Autonomous Agent Guardrails](./adr/006-model-context-protocol-and-autonomous-agent-guardrails.md)**
+- **[ADR-007: PostgreSQL Cluster Migration, 16-Shard Routing, Soft Token-Bucket Quotas & No-Inference Autonomous Persona Studio](./adr/007-postgres-sharding-and-soft-agent-quotas.md)**
+- **[ADR-008: Domain-Driven Design (DDD) Bounded-Context Modularization of Backend Route Handlers](./adr/008-ddd-bounded-context-handlers-refactoring.md)**
 
 ---
 

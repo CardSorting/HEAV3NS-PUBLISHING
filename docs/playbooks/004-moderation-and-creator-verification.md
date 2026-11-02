@@ -1,13 +1,13 @@
 # Playbook 004: Content Moderation & Creator Identity Verification
 
 ## Objective
-Process creator KYC identity verification submissions (`user_verifies`) and triage user-submitted abuse/safety reports (`user_reports`).
+Process creator KYC identity verification submissions (`user_verifies`) and triage user-submitted abuse/safety reports (`user_reports`) via the DDD handlers in [`backend/src/handlers/identity/settings.rs`](../../backend/src/handlers/identity/settings.rs), [`backend/src/handlers/platform/admin.rs`](../../backend/src/handlers/platform/admin.rs), and [`backend/src/handlers/content/posts.rs`](../../backend/src/handlers/content/posts.rs).
 
 ---
 
 ## Part 1: Creator KYC Identity Verification
 
-Creators submit government ID documentation via `/settings` (**Verify** tab), which sends `POST /api/settings/verify` with `{"files": ["..."]}` (`Vec<String>`) and creates/updates a row in `user_verifies` with `status = 'pending'`.
+Creators submit government ID documentation via `/my/settings?tab=verify` (**Verify** tab), which sends `POST /api/settings/verify` (`handlers::identity::submit_verification_request`) with `{"files": ["..."]}` (`Vec<String>`) and creates/updates a row in `user_verifies` with `status = 'pending'`.
 
 ### Step 1: Inspect Pending Verifications
 ```sql
@@ -19,55 +19,56 @@ ORDER BY uv.created_at ASC;
 ```
 
 ### Step 2: Approve or Reject via Admin Dashboard or API
-- **Approve**: Sets `user_verifies.status = 'verified'` AND updates `users.identity_verified_at = CURRENT_TIMESTAMP`, displaying the verified badge across the creator's profile, posts, reels, and streams.
-- **Reject**: Sets `user_verifies.status = 'rejected'` and records `rejection_reason`.
+- **Approve (`action: "approve"`)**: Sets `user_verifies.status = 'verified'` AND updates `users.identity_verified_at = datetime('now')` in [`handle_admin_verification`](../../backend/src/handlers/platform/admin.rs), displaying the verified badge across the creator's profile, posts, reels, and streams.
+- **Reject (`action: "reject"`)**: Sets `user_verifies.status = 'rejected'`, clears `identity_verified_at = NULL`, and records `rejection_reason`.
 
 ```bash
 # Approve verification ID 1
 curl -s -X POST http://127.0.0.1:8080/api/admin/verifications/1 \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"status": "verified"}' | jq .
+  -d '{"action": "approve"}' | jq .
 
 # Reject verification ID 1
 curl -s -X POST http://127.0.0.1:8080/api/admin/verifications/1 \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"status": "rejected", "reason": "ID document was blurry or expired"}' | jq .
+  -d '{"action": "reject", "rejection_reason": "ID document was blurry or expired"}' | jq .
 ```
 
 ---
 
 ## Part 2: User & Content Moderation (`user_reports`)
 
-Users can report profiles, posts, messages, or streams via `POST /api/reports`. Each report contains:
-- `from_user_id` (serialized as `reporter` in `GET /api/admin/reports`)
-- `user_id` (serialized as `reported`)
-- `post_id`, `message_id`, or `stream_id` (optional target resource)
-- `type` (e.g., `"I don't like this post"`, `"Spam"`, `"Copyright"`, `"Harassment"`)
+Users can report profiles or posts via `POST /api/report` (`handlers::platform::submit_report`). Each report contains:
+- `from_user_id` (serialized as `reporter` in `GET /api/admin/dashboard`)
+- `reported_user_id` (serialized as `reported`)
+- `post_id` (optional target post)
+- `report_type` (e.g., `"Inappropriate content"`, `"Spam"`, `"Copyright"`, `"Harassment"`)
 - `details` (free-text context)
-- `status` (`"received"`, `"seen"`, `"solved"`)
+- `status` (`"received"`, `"resolved"`, `"dismissed"`)
 
 ### Step 1: Review Open Reports
-Navigate to `/admin` -> **Moderation Reports**, or query via API:
+Navigate to `/admin` -> **Moderation Reports**, or query via API (`handlers::platform::get_admin_dashboard`):
 ```bash
-curl -s http://127.0.0.1:8080/api/admin/reports \
-  -H "Authorization: Bearer $ADMIN_TOKEN" | jq .
+curl -s http://127.0.0.1:8080/api/admin/dashboard \
+  -H "Authorization: Bearer $ADMIN_TOKEN" | jq .reports
 ```
 
 ### Step 2: Take Enforcement Action
-If a reported post violates platform policy, remove it using the admin token (admins bypass the creator ownership check in `delete_post`):
+If a reported post violates platform policy, remove it using the admin token (admins bypass the creator ownership check in `handlers::content::delete_post` in [`backend/src/handlers/content/posts.rs`](../../backend/src/handlers/content/posts.rs)):
 ```bash
 curl -s -X DELETE http://127.0.0.1:8080/api/posts/$OFFENDING_POST_ID \
   -H "Authorization: Bearer $ADMIN_TOKEN" | jq .
 ```
 
-### Step 3: Resolve the Report
-Mark the report as `"solved"` or `"seen"`:
+### Step 3: Resolve or Dismiss the Report
+Mark the report as `"resolved"` (`action: "resolve"`) or `"dismissed"` (`action: "dismiss"`) via `handlers::platform::handle_admin_report`:
 ```bash
 curl -s -X POST http://127.0.0.1:8080/api/admin/reports/$REPORT_ID \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"status": "solved"}' | jq .
+  -d '{"action": "resolve"}' | jq .
 ```
+
 

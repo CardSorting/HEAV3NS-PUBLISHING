@@ -8,15 +8,24 @@ This guide is optimized for **autonomous AI coding agents** and **human software
 
 When starting a coding, debugging, or feature task, inspect files in this exact order:
 
-1. **[`docs/knowledge-base/overview.md`](../knowledge-base/overview.md)** — Domain vocabulary and the 6 non-negotiable business invariants.
+1. **[`docs/knowledge-base/overview.md`](../knowledge-base/overview.md)** — Domain vocabulary, the 6 non-negotiable business invariants, and the full DDD codebase map.
 2. **[`backend/src/models.rs`](../../backend/src/models.rs)** — Canonical Rust `serde` data structures serialized across the API boundary.
-3. **[`backend/src/db.rs`](../../backend/src/db.rs)** — 24-table SQLite schema (`init_db`), demo seed data (`seed_db`), paywall evaluation (`is_post_unlocked`), and redacted view builders (`get_user_public_profile`, `build_post_view`).
-4. **[`backend/src/auth.rs`](../../backend/src/auth.rs)** — Dual-channel JWT + scoped `hp_mcp_*` agent token authentication, HMAC-SHA256 token hashing (`hash_agent_token`), and capability scope enforcement (`require_scope`).
-5. **[`backend/src/mcp.rs`](../../backend/src/mcp.rs)** — Model Context Protocol (MCP 2024-11-05) JSON-RPC 2.0 server (`POST /api/mcp`), manifest (`GET /api/mcp/manifest`), and 26 autonomous agent tools.
-6. **[`backend/src/handlers.rs`](../../backend/src/handlers.rs)** — All 70+ Axum route handlers, spend guardrails, and `BEGIN IMMEDIATE` transaction blocks.
-7. **[`backend/src/main.rs`](../../backend/src/main.rs)** — Route registration (`build_app`) and the 9 end-to-end integration test suites (`mod tests`).
+3. **[`backend/src/db.rs`](../../backend/src/db.rs)** & **[`backend/migrations/001_heav3ns_publishing_postgres.sql`](../../backend/migrations/001_heav3ns_publishing_postgres.sql)** — 28-table PostgreSQL & SQLite schema (`init_db`, `init_postgres_db`), demo seed data (`seed_db`), paywall evaluation (`is_post_unlocked`), and redacted view builders (`get_user_public_profile`, `build_post_view`).
+4. **[`backend/src/auth.rs`](../../backend/src/auth.rs)** & **[`backend/src/sharding.rs`](../../backend/src/sharding.rs)** — Dual-channel JWT + scoped `hp_mcp_*` agent token authentication, HMAC-SHA256 token hashing (`hash_agent_token`), capability scope enforcement (`require_scope`), 16-shard consistent hashing (`0..15`), 3 relay pool tiers (`central`, `premium`, `studio`), and GCRA soft token-bucket quota pacing.
+5. **[`backend/src/mcp.rs`](../../backend/src/mcp.rs)** — Model Context Protocol (MCP 2024-11-05) JSON-RPC 2.0 server (`POST /api/mcp`), manifest (`GET /api/mcp/manifest`), and 32 autonomous agent tools.
+6. **[`backend/src/handlers.rs`](../../backend/src/handlers.rs)** & **[`backend/src/handlers/`](../../backend/src/handlers/)** ([ADR-008](../adr/008-ddd-bounded-context-handlers-refactoring.md)) — All 75+ Axum route handlers organized into **9 DDD bounded-context directories** (each with a `mod.rs` facade re-exporting focused sub-domain files):
+   - [`handlers/content/{posts,engagement}.rs`](../../backend/src/handlers/content/) — Post CRUD, pin toggles, likes, bookmarks, comments, and poll voting.
+   - [`handlers/discovery/{feed,profiles,search}.rs`](../../backend/src/handlers/discovery/) — Category-filtered feed, creator suggestions, public profiles, and Explore search.
+   - [`handlers/governance/{tokens,personas}.rs`](../../backend/src/handlers/governance/) — Scoped `hp_mcp_*` agent tokens, 16-shard telemetry, and No-Inference Autonomous Persona Studio.
+   - [`handlers/identity/{auth,settings}.rs`](../../backend/src/handlers/identity/) — Registration, login, logout, `/auth/me`, settings tabs, and KYC verification submission.
+   - [`handlers/media/{vault,reels,stories,streams}.rs`](../../backend/src/handlers/media/) — Media Vault uploads/archiving, PPV Reels, 24h Stories/Highlights, and RTMP/HLS Live Streams.
+   - [`handlers/messaging/{dm,broadcast}.rs`](../../backend/src/handlers/messaging/) — 1-on-1 Direct Messenger, PPV message unlocks, and mass subscriber/follower Broadcast DMs.
+   - [`handlers/monetization/{ledger,analytics}.rs`](../../backend/src/handlers/monetization/) — `BEGIN IMMEDIATE` ACID payment ledger (`initiate_payment`), 85/15 creator split, withdrawals, invoices, and creator analytics.
+   - [`handlers/platform/{home,admin}.rs`](../../backend/src/handlers/platform/) — Health check, home discovery, public CMS pages, AI caption assistant, moderation reports, and Admin Dashboard.
+   - [`handlers/social/{lists,graph,notifications}.rs`](../../backend/src/handlers/social/) — Saved bookmarks, custom user lists, follow/block graph, and activity notifications.
+7. **[`backend/src/main.rs`](../../backend/src/main.rs)** — Explicit domain-qualified route registration (`handlers::<domain>::*` in `build_app`) and the end-to-end integration test suites (`mod tests`).
 8. **[`frontend/src/lib/api.ts`](../../frontend/src/lib/api.ts)** — TypeScript interfaces and `apiFetch` client helpers consumed by the Next.js 16 App Router pages.
-9. **[`frontend/src/app/my/agents/page.tsx`](../../frontend/src/app/my/agents/page.tsx)** & **[`frontend/src/components/AppShell.tsx`](../../frontend/src/components/AppShell.tsx)** — Autonomous AI Agents & MCP Control Center UI and global `⌘K` Command Palette.
+9. **[`frontend/src/app/my/agents/page.tsx`](../../frontend/src/app/my/agents/page.tsx)** & **[`frontend/src/components/AppShell.tsx`](../../frontend/src/components/AppShell.tsx)** — Autonomous Persona Studio, 16-Shard Telemetry & MCP Control Center UI and global `⌘K` Command Palette.
 
 ---
 
@@ -45,7 +54,7 @@ When starting a coding, debugging, or feature task, inspect files in this exact 
 Before completing any task or opening a pull request, run all three verification commands and confirm **zero errors and zero warnings**:
 
 ```bash
-# 1. Run all 9 Rust backend integration & MCP test suites (< 0.15s execution)
+# 1. Run all Rust backend integration, sharding, MCP & security test suites
 cd backend && cargo test
 
 # 2. Run strict Clippy static analysis (warnings treated as errors)

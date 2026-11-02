@@ -4,7 +4,7 @@
 - **Severity**: Critical (SEV-1 — Financial Integrity)
 - **Status**: Resolved & Regression-Tested
 - **Date Discovered**: 2026-11-01 (During Phase 4 Verification of Rust/Next.js Migration)
-- **Affected Component**: [`backend/src/handlers.rs`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/handlers.rs) (`initiate_payment`, `admin_handle_withdrawal`)
+- **Affected Component**: [`backend/src/handlers/monetization/ledger.rs`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/handlers/monetization/ledger.rs) (`initiate_payment`) & [`backend/src/handlers/platform/admin.rs`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/handlers/platform/admin.rs) (`handle_admin_withdrawal`) (formerly in the [`backend/src/handlers.rs`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/handlers.rs) monolith)
 
 ---
 
@@ -13,7 +13,7 @@
 During adversarial security auditing of the unified payment endpoint (`POST /api/payments/initiate`), two high-severity financial logic flaws were identified:
 1. **Subscription Price Spoofing**: When initiating a `"subscription"` transaction, the handler prioritized the optional `payload.amount` sent by the client and only queried the creator's database subscription price (`profile_access_price*`) when `payload.amount` was omitted (`None`). A malicious client sending `{"transaction_type": "subscription", "recipient_user_id": 1, "amount": 0.0}` could obtain an active creator subscription for `$0.00` (or even pass a negative number).
 2. **Duplicate PPV Unlock Charges**: When initiating `"post-unlock"`, `"message-unlock"`, or `"stream-unlock"` transactions, the handler did not check whether the fan had already unlocked the target item, nor did it verify that the item's database price matched. Fans could be charged multiple times for the same PPV post, message, or stream.
-3. **Unrefunded Rejected Withdrawals**: In `admin_handle_withdrawal` (`POST /api/admin/withdrawals/:id`), rejecting a creator's withdrawal request updated `withdrawals.status = 'rejected'` without refunding the escrowed `amount` back to `wallets.total`.
+3. **Unrefunded Rejected Withdrawals**: In `handle_admin_withdrawal` (`POST /api/admin/withdrawals/:id`), rejecting a creator's withdrawal request updated `withdrawals.status = 'rejected'` without refunding the escrowed `amount` back to `wallets.total`.
 
 ---
 
@@ -33,13 +33,13 @@ Because the frontend UI conveniently passed `amount` in the JSON body for displa
 Unlike subscriptions (which updated an existing row or inserted a renewal), PPV unlocks simply inserted a new row into `transactions` and deducted the wallet balance without querying `SELECT COUNT(*) FROM transactions WHERE sender_user_id = ?1 AND post_id = ?2 AND type = 'post-unlock' AND status = 'approved'`.
 
 ### Flaw 3: Asymmetric Escrow Accounting on Withdrawals
-`request_withdrawal` immediately deducted `amount` from `wallets.total` to prevent double-withdrawal requests, assuming most withdrawals would be `"approved"`. However, the `"rejected"` branch in `admin_handle_withdrawal` only updated the `withdrawals` table status and forgot to reverse the wallet debit.
+`request_withdrawal` immediately deducted `amount` from `wallets.total` to prevent double-withdrawal requests, assuming most withdrawals would be `"approved"`. However, the `"rejected"` branch in `handle_admin_withdrawal` only updated the `withdrawals` table status and forgot to reverse the wallet debit.
 
 ---
 
 ## 3. Resolution & Code Changes
 
-All three issues were remediated in [`backend/src/handlers.rs`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/handlers.rs):
+All three issues were remediated in [`backend/src/handlers/monetization/ledger.rs`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/handlers/monetization/ledger.rs) and [`backend/src/handlers/platform/admin.rs`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/handlers/platform/admin.rs) (re-exported via [`backend/src/handlers.rs`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/handlers.rs)):
 
 1. **Authoritative Server-Side Pricing**:
    - `"subscription"` ignores `payload.amount` completely and always queries `profile_access_price`, `profile_access_price_3_months`, `profile_access_price_6_months`, or `profile_access_price_12_months` from `users`.

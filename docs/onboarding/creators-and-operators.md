@@ -50,6 +50,11 @@ Open **`http://localhost:3000`** and sign in with any seeded demo account (passw
 1. You earn **85%** of every subscription, PPV unlock, and tip immediately into your wallet (`wallets.total`).
 2. Go to **Settings → Wallet** (`/my/settings?tab=wallet`), switch to **Withdraw**, and request a payout (`$20.00` minimum).
 
+### F. Delegate to Autonomous AI Personas & Scoped MCP Agents (`/my/agents`)
+1. Navigate to **Autonomous Agents & Persona Studio** (`/my/agents` or press `⌘K` → **Autonomous Agents**).
+2. Mint a scoped `hp_mcp_*` agent token with custom capability scopes (`read`, `write`, `engage`, `monetize`, `messages`, `wallet`), a virtual shard (`0..15`), a relay pool tier (`central`, `premium`, `studio`), and hardware-grade financial spend caps (`max_spend_per_tx` & `daily_spend_limit`).
+3. Create or evolve a **No-Inference Autonomous Persona** (`agent_personas`), record numbered practice revisions, compile a zero-inference Markdown execution brief, and inspect live 16-shard quota telemetry (`handlers::governance::*`).
+
 ---
 
 ## 3. Platform Operator & Admin Runbooks
@@ -61,4 +66,5 @@ Platform administrators (`role_id = 1`, e.g. `aria@justfans.local`) have access 
 - **[Playbook 003: Payment, Wallet & Creator Payout Reconciliation](../playbooks/003-payment-and-payout-reconciliation.md)**
 - **[Playbook 004: Content Moderation & Creator KYC Verification](../playbooks/004-moderation-and-creator-verification.md)**
 - **[Playbook 005: Security Incident Response & Paywall Audit](../playbooks/005-security-incident-and-paywall-audit.md)**
+
 

@@ -49,30 +49,75 @@ This document captures the institutional knowledge, domain vocabulary, business 
 
 ---
 
-## 3. Codebase Map
+## 3. Codebase Map (DDD Bounded-Context Architecture)
 
 ```text
 HEAV3NS-PUBLISHING/
-├── backend/                        # Rust (Axum 0.7 + SQLite) API Server
+├── backend/                        # Rust (Axum 0.7 + PostgreSQL & SQLite WAL) API Server
 │   ├── Cargo.toml                  # Rust crate dependencies
+│   ├── migrations/
+│   │   └── 001_heav3ns_publishing_postgres.sql # 28-table PostgreSQL DDL & indexes
 │   └── src/
-│       ├── main.rs                 # App router, CORS, static file mounts, 7 integration tests
-│       ├── auth.rs                 # JWT encode/decode, AuthUser & OptionalAuthUser extractors, AppError
-│       ├── db.rs                   # 21-table SQLite schema, seed_db(), get_user_public_profile(), build_post_view()
-│       ├── handlers.rs             # All 45+ HTTP route handlers & business logic
-│       └── models.rs               # Serde request/response DTO structs
-├── frontend/                       # Next.js 14 (App Router + TypeScript) Web Client
+│       ├── main.rs                 # App router (explicit handlers::<domain>::* bindings), CORS, 11 integration test suites
+│       ├── auth.rs                 # JWT encode/decode, scoped hp_mcp_* agent tokens, AuthUser & OptionalAuthUser extractors
+│       ├── db.rs                   # 28-table SQLite/PostgreSQL schema, seed_db(), get_user_public_profile(), build_post_view()
+│       ├── handlers.rs             # Top-level DDD bounded-context facade re-exporting all 9 domain modules
+│       ├── handlers/               # 9 DDD bounded-context directories (22 sub-domain modules + 9 mod.rs facades)
+│       │   ├── content/            # Bounded Context 1: Publishing & Interactive Engagement
+│       │   │   ├── mod.rs          # Re-exports posts::* & engagement::*
+│       │   │   ├── posts.rs        # get_single_post, save_post, delete_post, toggle_pin_post
+│       │   │   └── engagement.rs   # toggle_reaction, toggle_bookmark, add/edit/delete_comment, vote_poll
+│       │   ├── discovery/          # Bounded Context 2: Feed, Creator Profiles & Explore Search
+│       │   │   ├── mod.rs          # Re-exports feed::*, profiles::*, search::*
+│       │   │   ├── feed.rs         # get_feed, filter_suggestions
+│       │   │   ├── profiles.rs     # get_profile
+│       │   │   └── search.rs       # search_handler
+│       │   ├── governance/         # Bounded Context 3: Agent Tokens, Shards & Autonomous Personas
+│       │   │   ├── mod.rs          # Re-exports tokens::* & personas::*
+│       │   │   ├── tokens.rs       # create/get/revoke/delete_agent_token, list_user_agent_tokens/audit_logs
+│       │   │   └── personas.rs     # get_agent_shards_telemetry, get/upsert_agent_personas, update_persona_practice, compile_persona_brief_handler, record_persona_activity
+│       │   ├── identity/           # Bounded Context 4: Authentication, Account & Creator Settings
+│       │   │   ├── mod.rs          # Re-exports auth::* & settings::*
+│       │   │   ├── auth.rs         # register, login, logout, get_me, normalize_db_datetime
+│       │   │   └── settings.rs     # get_settings_data, update_profile/rates/account/privacy_settings, submit_verification_request
+│       │   ├── media/              # Bounded Context 5: Vault, Reels, Stories & Live Streams
+│       │   │   ├── mod.rs          # Re-exports vault::*, reels::*, stories::*, streams::*
+│       │   │   ├── vault.rs        # get_vault_items, upload_attachment, toggle_archive_vault_item, delete_vault_item
+│       │   │   ├── reels.rs        # get_reels, create_reel, delete_reel, increment_reel_view, get/add/delete_reel_comment, compute_reel_unlocked
+│       │   │   ├── stories.rs      # get_stories, create_story, delete_story, increment_story_view, toggle_story_highlight
+│       │   │   └── streams.rs      # get_streams, save_stream, stop_stream, delete_stream, get_stream_detail, add_stream_comment, compute_stream_unlocked
+│       │   ├── messaging/          # Bounded Context 6: 1-on-1 Direct Messenger & Mass Broadcasts
+│       │   │   ├── mod.rs          # Re-exports dm::* & broadcast::*
+│       │   │   ├── dm.rs           # get_messenger_contacts, get_messages_with_user, send_message, toggle_pin_message, delete_message
+│       │   │   └── broadcast.rs    # broadcast_message
+│       │   ├── monetization/       # Bounded Context 7: ACID Financial Ledger, Payouts & Analytics
+│       │   │   ├── mod.rs          # Re-exports ledger::* & analytics::*
+│       │   │   ├── ledger.rs       # initiate_payment, cancel_subscription, request_withdrawal, get_invoice_detail
+│       │   │   └── analytics.rs    # get_creator_analytics
+│       │   ├── platform/           # Bounded Context 8: Health, Home Discovery, Public CMS & Admin Moderation
+│       │   │   ├── mod.rs          # Re-exports home::* & admin::*
+│       │   │   ├── home.rs         # health_check, get_home_data
+│       │   │   └── admin.rs        # get_public_page, send_contact_message, submit_report, generate_ai_suggestion, get_admin_dashboard, handle_admin_withdrawal/report/verification
+│       │   └── social/             # Bounded Context 9: Custom Lists, Follow/Block Graph & Notifications
+│       │       ├── mod.rs          # Re-exports lists::*, graph::*, notifications::*
+│       │       ├── lists.rs        # get_bookmarks, get_lists, get_list_detail, save_list, rename_list, clear_list, delete_list, toggle_list_member
+│       │       ├── graph.rs        # toggle_follow, toggle_block_user
+│       │       └── notifications.rs# get_notifications
+│       ├── mcp.rs                  # Model Context Protocol (MCP 2024-11-05) JSON-RPC 2.0 server & 32 autonomous tools
+│       ├── models.rs               # Serde request/response DTO structs
+│       └── sharding.rs             # 16-virtual-shard ring, soft token-bucket quotas, and autonomous personas
+├── frontend/                       # Next.js 16.4.3 (App Router + Turbopack + React 19.3.1 + TypeScript) Web Client
 │   ├── next.config.mjs             # Proxies /api/* and /uploads/* to Rust backend
-│   ├── package.json                # Next.js 14, React 18, TypeScript dependencies
+│   ├── package.json                # Next.js 16.4.3, React 19.3.1, TypeScript dependencies
 │   ├── public/                     # Static assets (Bootstrap 5 theme CSS, SVG illustrations, fonts)
 │   └── src/
 │       ├── lib/api.ts              # Typed apiFetch() wrapper, JWT storage helpers, TypeScript interfaces
 │       ├── context/AuthContext.tsx # Global user session, wallet balance, unread counts, dark mode state
 │       ├── components/
-│       │   ├── AppShell.tsx        # Left navigation sidebar, account mini-card, theme toggle
+│       │   ├── AppShell.tsx        # Left navigation sidebar, ⌘K Command Palette, account mini-card, theme toggle
 │       │   ├── PostCard.tsx        # Post rendering, paywall CTAs, polls, comments, tips, report modal
 │       │   └── PostComposerForm.tsx# Post create/edit, file upload, Vault picker, AI caption assistant
-│       └── app/                    # 21 Next.js App Router pages
+│       └── app/                    # 26 Next.js App Router pages
 │           ├── page.tsx            # Public landing page
 │           ├── login/page.tsx      # Login + 1-click demo account switcher
 │           ├── register/page.tsx   # Account registration ($100 welcome credit)
@@ -88,15 +133,16 @@ HEAV3NS-PUBLISHING/
 │           ├── contact/page.tsx    # Support contact form
 │           ├── pages/[slug]/       # Public CMS pages (terms-and-conditions, privacy, help)
 │           └── my/                 # Authenticated user workspace
-│               ├── messenger/      # Direct messaging & PPV message unlocks
+│               ├── agents/         # Autonomous Persona Studio, 16-Shard Telemetry & MCP Control Center
+│               ├── messenger/      # Direct messaging, Broadcast DMs & PPV message unlocks
 │               ├── notifications/  # Activity notifications by type
 │               ├── bookmarks/      # Saved posts & saved reels
 │               ├── lists/          # Custom user lists & member management
 │               ├── vault/          # Reusable media vault manager
 │               ├── streams/        # Creator broadcast studio
 │               └── settings/       # 9-tab settings (Profile, Rates, Wallet, Subscriptions, Payments, Verify, Account, Privacy, Referrals)
-├── docs/                           # Engineering Documentation, Knowledge Base, ADRs, Playbooks, Post-Mortems
-└── start-dev.sh                    # Unified development launcher with SIGINT/SIGTERM cleanup trap
+├── docs/                           # Engineering Documentation, Knowledge Base, 8 ADRs, 5 Playbooks, 4 Post-Mortems
+└── start-dev.sh                    # Unified development launcher (PostgreSQL + Rust Axum + Next.js 16)
 ```
 
 ---

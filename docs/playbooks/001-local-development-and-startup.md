@@ -1,14 +1,14 @@
 # Playbook 001: Local Development, Startup & Full-Stack Verification
 
 ## Objective
-Bring up the complete HEAV3NS-PUBLISHING stack (Rust Axum backend + Next.js 14 frontend) locally, verify health checks, and run the automated test and build suites.
+Bring up the complete HEAV3NS-PUBLISHING stack (Rust Axum backend with 9 DDD bounded-context handler modules + PostgreSQL/SQLite WAL + Next.js 16.4.3 frontend) locally, verify health checks, and run the automated test and build suites.
 
 ---
 
 ## Prerequisites
 - **Rust Toolchain**: `rustc` / `cargo` 1.75+ (`rustup update stable`)
-- **Node.js**: v18.18+ or v20+ (`node -v`, `npm -v`)
-- **SQLite3 CLI** (optional, for manual DB inspection): `sqlite3 --version`
+- **Node.js**: v20+ (`node -v`, `npm -v`)
+- **PostgreSQL & SQLite3 CLI** (optional, `./start-dev.sh` auto-initializes local PostgreSQL if installed): `sqlite3 --version`
 
 ---
 
@@ -23,8 +23,9 @@ cargo run
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `8080` | TCP port the Axum server binds to (`0.0.0.0:$PORT`) |
-| `DATABASE_URL` | `justfans.db` | Path to the SQLite database file |
-| `UPLOAD_DIR` | `uploads` | Directory where user-uploaded media files are stored and served at `/uploads/*` |
+| `DATABASE_PATH` | `justfans.sqlite` | Path to the SQLite WAL database file |
+| `HEAV3NS_DATABASE_URL` | `postgres://postgres@127.0.0.1:54329/heav3ns_publishing` | Optional PostgreSQL cluster connection string |
+| `UPLOADS_DIR` | `./uploads` | Directory where user-uploaded media files are stored and served at `/uploads/*` |
 | `JWT_SECRET` | `justfans_super_secret_jwt_key_2026_rust_edition` | HMAC-SHA256 secret used to sign and verify JWT tokens |
 
 ### Verify Backend Health
@@ -35,16 +36,16 @@ Expected output:
 ```json
 {
   "status": "ok",
-  "service": "justfans-rust-backend",
-  "version": "1.0.0"
+  "service": "heav3ns-publishing-rust-backend",
+  "version": "2.0.0"
 }
 ```
 
 ---
 
-## Step 2: Start the Next.js Frontend (`:3000`)
+## Step 2: Start the Next.js 16 Frontend (`:3000`)
 
-In a second terminal:
+In a second terminal (or use `./start-dev.sh` from the repository root to launch everything together):
 
 ```bash
 cd frontend
@@ -57,7 +58,7 @@ npm run dev
 |----------|---------|-------------|
 | `BACKEND_URL` | `http://127.0.0.1:8080` | Target URL for Next.js `/api/:path*` and `/uploads/:path*` rewrites in `next.config.mjs` |
 
-Open `http://localhost:3000` in your browser. You can sign in immediately using any of the seeded demo accounts (`alex@justfans.test`, `sophia@justfans.test`, `admin@justfans.test` — password `password123`).
+Open `http://localhost:3000` in your browser. You can sign in immediately using any of the seeded demo accounts (`aria@justfans.local`, `marcus@justfans.local`, `elena@justfans.local`, `alex@justfans.local` — password `password123`).
 
 ---
 
@@ -66,13 +67,13 @@ Open `http://localhost:3000` in your browser. You can sign in immediately using 
 Before merging or pushing changes to `main`, execute all three verification gates:
 
 ```bash
-# 1. Backend integration test suite (7 comprehensive end-to-end tests)
+# 1. Backend integration test suites (11 comprehensive end-to-end, PostgreSQL, MCP & sharding test suites)
 cd backend && cargo test
 
-# 2. Backend static analysis / linter (zero warnings allowed)
-cd backend && cargo clippy -- -D warnings
+# 2. Backend static analysis / linter across all targets (zero warnings allowed)
+cd backend && cargo clippy --all-targets -- -D warnings
 
-# 3. Frontend TypeScript & production bundle verification
+# 3. Frontend Next.js 16.4.3 TypeScript & production bundle verification (26 routes)
 cd frontend && npm run build
 ```
 

@@ -77,6 +77,8 @@ pub struct AuthUser {
     pub agent_scopes: Option<Vec<String>>,
     pub max_spend_per_tx: Option<f64>,
     pub daily_spend_limit: Option<f64>,
+    pub shard_id: Option<i64>,
+    pub pool_tier: Option<String>,
 }
 
 impl AuthUser {
@@ -134,7 +136,7 @@ pub fn resolve_token(state: &AppState, token: &str) -> Result<AuthUser, AppError
         let conn = state.lock_db();
         let row = conn
             .query_row(
-                "SELECT t.id, t.user_id, u.username, u.role_id, t.scopes, t.max_spend_per_tx, t.daily_spend_limit, t.is_active, t.expires_at
+                "SELECT t.id, t.user_id, u.username, u.role_id, t.scopes, t.max_spend_per_tx, t.daily_spend_limit, t.is_active, t.expires_at, t.shard_id, t.pool_tier
                  FROM agent_tokens t
                  JOIN users u ON t.user_id = u.id
                  WHERE t.token_hash = ?1",
@@ -150,12 +152,14 @@ pub fn resolve_token(state: &AppState, token: &str) -> Result<AuthUser, AppError
                         r.get::<_, f64>(6)?,
                         r.get::<_, i64>(7)? != 0,
                         r.get::<_, Option<String>>(8)?,
+                        r.get::<_, i64>(9).unwrap_or(0),
+                        r.get::<_, String>(10).unwrap_or_else(|_| "central".into()),
                     ))
                 },
             )
             .map_err(|_| AppError::Unauthorized("Invalid or revoked MCP agent token".into()))?;
 
-        let (tid, uid, username, role_id, scopes_raw, max_tx, daily_lim, is_active, expires_at) = row;
+        let (tid, uid, username, role_id, scopes_raw, max_tx, daily_lim, is_active, expires_at, shard_id, pool_tier) = row;
         if !is_active {
             return Err(AppError::Unauthorized("MCP agent token has been revoked".into()));
         }
@@ -180,10 +184,13 @@ pub fn resolve_token(state: &AppState, token: &str) -> Result<AuthUser, AppError
             agent_scopes: Some(scopes),
             max_spend_per_tx: Some(max_tx),
             daily_spend_limit: Some(daily_lim),
+            shard_id: Some(shard_id),
+            pool_tier: Some(pool_tier),
         });
     }
 
     let claims = decode_jwt(token)?;
+    let shard_id = crate::sharding::compute_user_shard(claims.sub, &claims.username);
     Ok(AuthUser {
         user_id: claims.sub,
         username: claims.username,
@@ -192,6 +199,8 @@ pub fn resolve_token(state: &AppState, token: &str) -> Result<AuthUser, AppError
         agent_scopes: None,
         max_spend_per_tx: None,
         daily_spend_limit: None,
+        shard_id: Some(shard_id),
+        pool_tier: Some("central".into()),
     })
 }
 
@@ -236,7 +245,9 @@ pub enum AppError {
     Unauthorized(String),
     Forbidden(String),
     NotFound(String),
+    Conflict(String),
     Unprocessable(String),
+    QuotaCooldownAdvisory(String, Box<crate::sharding::QuotaDecision>),
     Internal(String),
 }
 
@@ -251,24 +262,55 @@ impl From<rusqlite::Error> for AppError {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let (status, message) = match self {
-            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
-            AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg),
-            AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg),
-            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
-            AppError::Unprocessable(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg),
-            AppError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
-        };
+        match self {
+            AppError::QuotaCooldownAdvisory(message, decision) => {
+                let retry_sec = ((decision.retry_after_ms as f64) / 1000.0).ceil().max(1.0) as i64;
+                (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    [
+                        ("x-heav3ns-shard", decision.shard_id.to_string()),
+                        ("x-heav3ns-pool", decision.pool_tier.clone()),
+                        ("x-ratelimit-throttle-mode", decision.throttle_mode.clone()),
+                        ("x-ratelimit-pacing-ms", decision.pacing_delay_ms.to_string()),
+                        ("retry-after", retry_sec.to_string()),
+                    ],
+                    Json(json!({
+                        "success": false,
+                        "throttled": true,
+                        "status": "cooldown_advisory",
+                        "message": message,
+                        "error": message,
+                        "retry_after_ms": decision.retry_after_ms,
+                        "_quota_governance": decision,
+                        "_heav3ns_governance": decision,
+                    })),
+                )
+                    .into_response()
+            }
+            other => {
+                let (status, message) = match other {
+                    AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
+                    AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg),
+                    AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg),
+                    AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
+                    AppError::Conflict(msg) => (StatusCode::CONFLICT, msg),
+                    AppError::Unprocessable(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg),
+                    AppError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+                    AppError::QuotaCooldownAdvisory(_, _) => unreachable!(),
+                };
 
-        (
-            status,
-            Json(json!({
-                "success": false,
-                "message": message,
-                "error": message,
-            })),
-        )
-            .into_response()
+                (
+                    status,
+                    Json(json!({
+                        "success": false,
+                        "message": message,
+                        "error": message,
+                    })),
+                )
+                    .into_response()
+            }
+        }
     }
 }
+
 

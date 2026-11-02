@@ -4,7 +4,7 @@
 - **Severity**: High (SEV-2 — Paywall Bypass & Privacy Data Leak)
 - **Status**: Resolved & Regression-Tested
 - **Date Discovered**: 2026-11-01 (During Phase 4 Security & Privacy Audit)
-- **Affected Component**: [`backend/src/handlers.rs`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/handlers.rs) (`build_post_view`, `get_profile`, `get_streams`, `get_user_public_profile`)
+- **Affected Component**: [`backend/src/db.rs`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/db.rs) (`build_post_view`, `get_user_public_profile`), [`backend/src/handlers/discovery/profiles.rs`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/handlers/discovery/profiles.rs) (`get_profile`), & [`backend/src/handlers/media/streams.rs`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/handlers/media/streams.rs) (`get_streams`, `compute_stream_unlocked`) (formerly in [`backend/src/handlers.rs`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/handlers.rs))
 
 ---
 

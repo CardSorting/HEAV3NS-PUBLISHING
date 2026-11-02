@@ -1,6 +1,23 @@
 # Database Schema & Entity Reference
 
-The Rust backend initializes and manages 21 relational tables in SQLite (`backend/src/db.rs`).
+The Rust backend initializes and manages **28 relational tables** across **PostgreSQL** (`backend/migrations/001_heav3ns_publishing_postgres.sql`, pooled via `AppState::postgres_pool` on port `54329`) and embedded **SQLite** (`backend/src/db.rs`).
+
+---
+
+## Autonomous Agent, Sharding, Soft Quota & Growth Tables
+
+| Table | Primary Key | Description |
+| :--- | :--- | :--- |
+| **`agent_tokens`** | `id` (`BIGSERIAL` / `INTEGER`) | Scoped `hp_mcp_*` agent credentials with `shard_id` (`0..15`), `pool_tier` (`central`, `premium`, `studio`), USD spend caps, and soft quota parameters (`daily_action_quota`, `hourly_burst_capacity`, `refill_rate_per_sec`). |
+| **`agent_audit_logs`** | `id` (`BIGSERIAL` / `INTEGER`) | Immutable audit trail of every MCP/REST agent action including `shard_id`, `pool_tier`, `action_units`, `throttle_mode`, `pacing_delay_ms`, `idempotency_key`, and `amount_spent`. |
+| **`agent_quota_buckets`** | `agent_token_id` (`BIGINT` / `INTEGER`) | Continuous-refill GCRA/token-bucket state (`available_tokens`, `burst_capacity`, `refill_rate_per_sec`, `daily_units_used`, `daily_quota_limit`, `soft_throttled_count`, `deferred_count`). |
+| **`agent_action_idempotency`** | `(user_id, idempotency_key)` | Idempotency ledger caching completed tool responses and guarding concurrent in-flight executions (`__IN_FLIGHT__`). |
+| **`agent_personas`** | `id` (`TEXT`) | No-Inference Autonomous Persona Studio residency storing `shard_id`, `pool_tier`, `autonomy_mode`, `engagement_cadence`, `current_revision`, `practices_json`, and `activities_json`. |
+| **`creator_offers`** | `id` (`BIGSERIAL` / `INTEGER`) | Creator promotional discount offers (`user_id UNIQUE`, `old_profile_access_price*`, `discount_percent`, `expires_at`). |
+| **`referrals`** | `id` (`BIGSERIAL` / `INTEGER`) | Creator referral redemptions and `$5.00` wallet bonus awards. |
+| **`story_views`** | `id` (`BIGSERIAL` / `INTEGER`) | Unique viewer tracking (`UNIQUE(story_id, viewer_user_id)`) for 24-hour stories and highlights. |
+| **`stream_messages`** | `id` (`BIGSERIAL` / `INTEGER`) | Real-time live stream chat messages gated by stream entitlement. |
+
 
 ---
 
@@ -9,6 +26,11 @@ The Rust backend initializes and manages 21 relational tables in SQLite (`backen
 ```mermaid
 erDiagram
     users ||--o| wallets : "1:1 balance"
+    users ||--o{ agent_tokens : "provisions"
+    users ||--o{ agent_personas : "operates"
+    users ||--o{ agent_quota_buckets : "paces"
+    users ||--o{ agent_action_idempotency : "deduplicates"
+    users ||--o{ agent_audit_logs : "audits"
     users ||--o{ posts : "authors"
     users ||--o{ attachments : "uploads"
     users ||--o{ post_comments : "writes"

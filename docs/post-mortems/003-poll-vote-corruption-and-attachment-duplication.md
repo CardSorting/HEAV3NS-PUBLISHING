@@ -4,7 +4,7 @@
 - **Severity**: Medium (SEV-3 — Data Integrity)
 - **Status**: Resolved & Regression-Tested
 - **Date Discovered**: 2026-11-01 (During Backend Handler Code Review)
-- **Affected Component**: [`backend/src/handlers.rs`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/handlers.rs) (`vote_poll`, `save_post`)
+- **Affected Component**: [`backend/src/handlers/content/engagement.rs`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/handlers/content/engagement.rs) (`vote_poll`) & [`backend/src/handlers/content/posts.rs`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/handlers/content/posts.rs) (`save_post`) (re-exported via [`backend/src/handlers.rs`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/handlers.rs))
 
 ---
 

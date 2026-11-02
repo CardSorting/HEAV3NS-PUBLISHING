@@ -20,19 +20,19 @@ If each flow maintained its own payment endpoint and custom accounting logic, th
 
 ## Decision
 
-We centralized all fan-to-creator and wallet deposit transactions into a single handler, [`initiate_payment`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/handlers.rs) (`POST /api/payments/initiate`), governed by four strict rules:
+We centralized all fan-to-creator and wallet deposit transactions into a single handler, [`initiate_payment`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/handlers/monetization/ledger.rs) (`POST /api/payments/initiate`, re-exported via [`backend/src/handlers/monetization/mod.rs`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/handlers/monetization/mod.rs) and [`backend/src/handlers.rs`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/handlers.rs)), governed by four strict rules:
 
 1. **Authoritative Server-Side Pricing**:
    - For `"subscription"`, client-supplied `amount` is **ignored**; the price is queried directly from `users.profile_access_price` / `profile_access_price_3_months` / `profile_access_price_6_months` / `profile_access_price_12_months` and must be `> 0.0`.
-   - For `"post-unlock"`, `"message-unlock"`, and `"stream-unlock"`, the price and recipient `creator_id` are queried directly from `posts.price`, `user_messages.price`, and `streams.price`.
+   - For `"post-unlock"`, `"reel-unlock"`, `"message-unlock"`, and `"stream-unlock"`, the price and recipient `creator_id` are queried directly from `posts.price`, `reels.price`, `user_messages.price`, and `streams.price`.
    - For `"deposit"` and `"tip"`, the client-supplied `amount` must be strictly `> 0.0`.
 2. **Idempotent / Duplicate-Purchase Prevention**:
-   - Before charging a user for `"post-unlock"`, `"message-unlock"`, or `"stream-unlock"`, the handler queries `transactions` for an existing `status = 'approved'` record matching the user and target resource (`post_id`, `user_message_id`, or `stream_id`). If found, it rejects the request with `400 Bad Request` (`"Post/Message/Stream already unlocked"`).
+   - Before charging a user for `"post-unlock"`, `"reel-unlock"`, `"message-unlock"`, or `"stream-unlock"`, the handler queries `transactions` for an existing `status = 'approved'` record matching the user and target resource (`post_id`, `reel_id`, `message_id`, or `stream_id`). If found, it rejects the request (`422 Unprocessable Entity`, `"already unlocked"`).
 3. **Deterministic 85% / 15% Revenue Split**:
-   - For all creator-directed payments (`recipient_id != sender_id` and `tx_type != "deposit"`), the creator's `wallets.total` is immediately credited with `amount * 0.85`, while the 15% platform fee is retained implicitly in the transaction ledger.
+   - For all creator-directed payments (`recipient_id != sender_id` and `tx_type != "deposit"`), the creator's `wallets.total` is immediately credited with `round_money(amount * 0.85)`, while the 15% platform fee is retained implicitly in the transaction ledger.
 4. **Immediate Escrow Deduction & Rejection Refund on Withdrawals**:
-   - Requesting a withdrawal (`POST /api/wallet/withdraw`, minimum `$20.00`) immediately deducts `amount` from `wallets.total` so those funds cannot be spent twice while `status = 'requested'`.
-   - If an administrator transitions the withdrawal to `status = 'rejected'` (`POST /api/admin/withdrawals/:id`), the exact `amount` is atomically refunded to `wallets.total`.
+   - Requesting a withdrawal ([`request_withdrawal`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/handlers/monetization/ledger.rs) at `POST /api/withdrawals/request`, minimum `$20.00`) immediately deducts `amount` from `wallets.total` so those funds cannot be spent twice while `status = 'requested'`.
+   - If an administrator transitions the withdrawal to `status = 'rejected'` ([`handle_admin_withdrawal`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/handlers/platform/admin.rs) at `POST /api/admin/withdrawals/:id`), the exact `amount` is atomically refunded to `wallets.total`.
 
 ## Consequences
 

@@ -1,3 +1,4 @@
+use postgres::{Client as PgClient, NoTls};
 use rusqlite::{params, Connection};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -11,12 +12,184 @@ pub struct AppState {
     pub db: Arc<Mutex<Connection>>,
     pub uploads_dir: String,
     pub public_dir: String,
+    pub postgres_url: Option<String>,
+    pub postgres_pool_size: usize,
+    pub postgres_pool: Arc<Mutex<Vec<PgClient>>>,
 }
 
 impl AppState {
     pub fn lock_db(&self) -> MutexGuard<'_, Connection> {
         self.db.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
+
+    pub fn db_engine_label(&self) -> &'static str {
+        if self.postgres_url.is_some() {
+            "postgresql_pooled_sharded"
+        } else {
+            "sqlite_embedded_wal"
+        }
+    }
+
+    /// Borrows a PostgreSQL connection from the pool (or opens a new one up to `postgres_pool_size`),
+    /// executes `f`, and returns the healthy client back to the pool. If a pooled connection fails
+    /// due to a server restart or idle disconnect, it transparently opens a fresh connection and retries once.
+    pub fn with_postgres<F, R>(&self, mut f: F) -> Option<R>
+    where
+        F: FnMut(&mut PgClient) -> Result<R, postgres::Error>,
+    {
+        let url = self.postgres_url.as_deref()?;
+        let mut from_pool = false;
+        let mut client_opt = {
+            let mut pool = self
+                .postgres_pool
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let popped = pool.pop();
+            if popped.is_some() {
+                from_pool = true;
+            }
+            popped
+        };
+
+        if client_opt.is_none() {
+            client_opt = PgClient::connect(url, NoTls).ok();
+        }
+
+        let mut client = client_opt?;
+        let mut res = f(&mut client).ok();
+
+        // If a pooled connection failed (e.g. PostgreSQL restarted), drop it and retry once on a fresh connection
+        if res.is_none() && from_pool {
+            if let Ok(mut fresh_client) = PgClient::connect(url, NoTls) {
+                if let Ok(retry_val) = f(&mut fresh_client) {
+                    let mut pool = self
+                        .postgres_pool
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    if pool.len() < self.postgres_pool_size {
+                        pool.push(fresh_client);
+                    }
+                    return Some(retry_val);
+                }
+            }
+            return None;
+        }
+
+        if res.is_some() {
+            let mut pool = self
+                .postgres_pool
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if pool.len() < self.postgres_pool_size {
+                pool.push(client);
+            }
+        }
+        res.take()
+    }
+
+    /// Synchronizes an autonomous persona residency and its revision/activity JSON to PostgreSQL when active.
+    pub fn sync_persona_to_postgres(&self, persona: &crate::sharding::AgentPersonaView) {
+        let practices_str =
+            serde_json::to_string(&persona.practices).unwrap_or_else(|_| "[]".to_string());
+        let activities_str =
+            serde_json::to_string(&persona.activities).unwrap_or_else(|_| "[]".to_string());
+        self.with_postgres(|pg| {
+            let _ = pg.execute(
+                "INSERT INTO agent_personas
+                 (id, user_id, handle, display_name, description, focus, shard_id, pool_tier,
+                  autonomy_mode, engagement_cadence, current_revision, practices_json, activities_json)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                 ON CONFLICT (id) DO UPDATE SET
+                    display_name = EXCLUDED.display_name,
+                    description = EXCLUDED.description,
+                    focus = EXCLUDED.focus,
+                    shard_id = EXCLUDED.shard_id,
+                    pool_tier = EXCLUDED.pool_tier,
+                    autonomy_mode = EXCLUDED.autonomy_mode,
+                    engagement_cadence = EXCLUDED.engagement_cadence,
+                    current_revision = EXCLUDED.current_revision,
+                    practices_json = EXCLUDED.practices_json,
+                    activities_json = EXCLUDED.activities_json,
+                    updated_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')",
+                &[
+                    &persona.id,
+                    &persona.user_id,
+                    &persona.handle,
+                    &persona.display_name,
+                    &persona.description,
+                    &persona.focus,
+                    &persona.shard_id,
+                    &persona.pool_tier,
+                    &persona.autonomy_mode,
+                    &persona.engagement_cadence,
+                    &persona.current_revision,
+                    &practices_str,
+                    &activities_str,
+                ],
+            );
+            Ok(())
+        });
+    }
+}
+
+pub const POSTGRES_MIGRATION_SQL: &str =
+    include_str!("../migrations/001_heav3ns_publishing_postgres.sql");
+
+/// Applies the full 28-table PostgreSQL DDL and seeds core personas/users on a live PostgreSQL URL.
+pub fn init_postgres_db(postgres_url: &str, pool_size: usize) -> Result<Vec<PgClient>, String> {
+    let mut primary = PgClient::connect(postgres_url, NoTls)
+        .map_err(|e| format!("Failed to connect to PostgreSQL ({postgres_url}): {e}"))?;
+    primary
+        .batch_execute(POSTGRES_MIGRATION_SQL)
+        .map_err(|e| format!("Failed to apply PostgreSQL migration: {e}"))?;
+
+    // Seed baseline users and personas in PostgreSQL if empty
+    let count_row = primary
+        .query_one("SELECT COUNT(*) FROM users", &[])
+        .map_err(|e| format!("Failed to query PostgreSQL users count: {e}"))?;
+    let user_count: i64 = count_row.get(0);
+    if user_count == 0 {
+        let default_hash =
+            bcrypt::hash("password123", 4).unwrap_or_else(|_| "$2b$04$invalid".to_string());
+        let _ = primary.execute(
+            "INSERT INTO users (id, name, username, email, password_hash, role_id, bio, location, website, profile_access_price, public_profile, paid_profile, open_profile, referral_code)
+             VALUES
+             (1, 'Aria Vance', 'ariavance', 'aria@justfans.local', $1, 1, 'Digital artist, cosplayer & exclusive visual storyteller.', 'Los Angeles, CA', 'https://ariavance.art', 14.99, 1, 1, 0, 'ARIA2026'),
+             (2, 'Marcus Sterling', 'marcusfit', 'marcus@justfans.local', $1, 2, 'Pro strength coach, nutrition protocols & daily live workout streams.', 'Miami, FL', 'https://marcusfit.io', 9.99, 1, 1, 0, 'MARCUSFIT'),
+             (3, 'Elena Rostova', 'elenamusic', 'elena@justfans.local', $1, 2, 'Indie synth-pop producer & vocalist.', 'Berlin, Germany', 'https://elenasynth.de', 0.0, 1, 0, 1, 'ELENA88'),
+             (4, 'Alex Rivera', 'alexrivera', 'alex@justfans.local', $1, 2, 'Supporting independent creators, music lovers & digital art collectors.', 'New York, NY', '', 0.0, 1, 0, 1, 'ALEXFAN')
+             ON CONFLICT (id) DO NOTHING",
+            &[&default_hash],
+        );
+        let _ = primary.batch_execute(
+            "SELECT setval(pg_get_serial_sequence('users', 'id'), COALESCE((SELECT MAX(id) FROM users), 1));
+             INSERT INTO wallets (user_id, total) VALUES (1, 1450.50), (2, 820.00), (3, 540.75), (4, 250.00) ON CONFLICT (user_id) DO NOTHING;",
+        );
+    }
+
+    let persona_row = primary
+        .query_one("SELECT COUNT(*) FROM agent_personas", &[])
+        .map_err(|e| format!("Failed to query PostgreSQL agent_personas count: {e}"))?;
+    let pg_persona_count: i64 = persona_row.get(0);
+    if pg_persona_count == 0 {
+        let _ = primary.batch_execute(
+            "INSERT INTO agent_personas
+             (id, user_id, handle, display_name, description, focus, shard_id, pool_tier, autonomy_mode, engagement_cadence, current_revision, practices_json, activities_json)
+             VALUES
+             ('persona-aria-neon', 1, 'aria-neon-architect', 'Aria Neon Studio Architect', 'Autonomous creative director & community engagement persona for Aria Vance.', 'creator', 4, 'premium', 'full_autonomous', 'high_touch', 1, '[{\"revision\":1,\"focus\":\"creator\",\"principles\":[\"Maintain cyberpunk neon visual consistency across every post, reel, and story.\"],\"interests\":[\"Cyberpunk Tokyo rooftop aesthetics\"],\"methods\":[\"Schedule teaser stories 4 hours before major PPV gallery releases.\"],\"direction\":\"Operate Aria Vance''s autonomous studio presence with high visual polish.\",\"recorded_at\":\"2026-03-01T12:00:00Z\"}]', '[]'),
+             ('persona-elena-synth', 3, 'elena-berlin-synth', 'Elena Berlin Synth Curator', 'Autonomous synthwave producer & cross-creator collaboration persona.', 'curator', 9, 'central', 'autonomous_co_pilot', 'balanced', 1, '[{\"revision\":1,\"focus\":\"curator\",\"principles\":[\"Share raw analog synth patches and Berlin studio stems.\"],\"interests\":[\"Modular synthesizer jams\"],\"methods\":[\"Publish short reel snippets of late-night studio sessions.\"],\"direction\":\"Curate and grow Elena Rostova''s synth-pop listener community.\",\"recorded_at\":\"2026-03-01T12:30:00Z\"}]', '[]')
+             ON CONFLICT (id) DO NOTHING;",
+        );
+    }
+
+    let mut pool = Vec::with_capacity(pool_size.max(1));
+    pool.push(primary);
+    for _ in 1..pool_size.min(4) {
+        if let Ok(c) = PgClient::connect(postgres_url, NoTls) {
+            pool.push(c);
+        }
+    }
+    Ok(pool)
 }
 
 pub fn round_money(val: f64) -> f64 {
@@ -383,6 +556,11 @@ pub fn init_db(db_path: &str) -> Result<Connection, rusqlite::Error> {
             scopes TEXT NOT NULL DEFAULT '["read","write","engage","monetize","messages","wallet"]',
             max_spend_per_tx REAL NOT NULL DEFAULT 50.0,
             daily_spend_limit REAL NOT NULL DEFAULT 200.0,
+            pool_tier TEXT NOT NULL DEFAULT 'central',
+            shard_id INTEGER NOT NULL DEFAULT 0,
+            daily_action_quota INTEGER NOT NULL DEFAULT 600,
+            hourly_burst_capacity REAL NOT NULL DEFAULT 120.0,
+            refill_rate_per_sec REAL NOT NULL DEFAULT 2.5,
             is_active INTEGER NOT NULL DEFAULT 1,
             last_used_at TEXT,
             expires_at TEXT,
@@ -398,15 +576,180 @@ pub fn init_db(db_path: &str) -> Result<Connection, rusqlite::Error> {
             resource_id TEXT,
             status TEXT NOT NULL DEFAULT 'success',
             amount_spent REAL NOT NULL DEFAULT 0.0,
+            action_units REAL NOT NULL DEFAULT 1.0,
+            shard_id INTEGER NOT NULL DEFAULT 0,
+            pool_tier TEXT NOT NULL DEFAULT 'central',
+            throttle_mode TEXT NOT NULL DEFAULT 'smooth',
+            pacing_delay_ms INTEGER NOT NULL DEFAULT 0,
+            idempotency_key TEXT,
             details TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS agent_quota_buckets (
+            agent_token_id INTEGER PRIMARY KEY REFERENCES agent_tokens(id) ON DELETE CASCADE,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            shard_id INTEGER NOT NULL DEFAULT 0,
+            pool_tier TEXT NOT NULL DEFAULT 'central',
+            available_tokens REAL NOT NULL DEFAULT 120.0,
+            burst_capacity REAL NOT NULL DEFAULT 120.0,
+            refill_rate_per_sec REAL NOT NULL DEFAULT 2.5,
+            daily_quota_limit INTEGER NOT NULL DEFAULT 600,
+            daily_units_used REAL NOT NULL DEFAULT 0.0,
+            daily_window_date TEXT NOT NULL DEFAULT '',
+            soft_throttled_count INTEGER NOT NULL DEFAULT 0,
+            deferred_count INTEGER NOT NULL DEFAULT 0,
+            last_refill_epoch_ms INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS agent_action_idempotency (
+            idempotency_key TEXT NOT NULL,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            tool_name TEXT NOT NULL,
+            response_json TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (user_id, idempotency_key)
+        );
+
+        CREATE TABLE IF NOT EXISTS agent_personas (
+            id TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            handle TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            display_name TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            focus TEXT NOT NULL DEFAULT 'creator',
+            shard_id INTEGER NOT NULL DEFAULT 0,
+            pool_tier TEXT NOT NULL DEFAULT 'central',
+            autonomy_mode TEXT NOT NULL DEFAULT 'autonomous_co_pilot',
+            engagement_cadence TEXT NOT NULL DEFAULT 'balanced',
+            current_revision INTEGER NOT NULL DEFAULT 1,
+            practices_json TEXT NOT NULL DEFAULT '[]',
+            activities_json TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
         "#,
     )?;
 
+    // Idempotent ALTER TABLE upgrades for existing SQLite files created before sharding/quota migration
+    for alter_sql in [
+        "ALTER TABLE agent_tokens ADD COLUMN pool_tier TEXT NOT NULL DEFAULT 'central'",
+        "ALTER TABLE agent_tokens ADD COLUMN shard_id INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE agent_tokens ADD COLUMN daily_action_quota INTEGER NOT NULL DEFAULT 600",
+        "ALTER TABLE agent_tokens ADD COLUMN hourly_burst_capacity REAL NOT NULL DEFAULT 120.0",
+        "ALTER TABLE agent_tokens ADD COLUMN refill_rate_per_sec REAL NOT NULL DEFAULT 2.5",
+        "ALTER TABLE agent_audit_logs ADD COLUMN action_units REAL NOT NULL DEFAULT 1.0",
+        "ALTER TABLE agent_audit_logs ADD COLUMN shard_id INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE agent_audit_logs ADD COLUMN pool_tier TEXT NOT NULL DEFAULT 'central'",
+        "ALTER TABLE agent_audit_logs ADD COLUMN throttle_mode TEXT NOT NULL DEFAULT 'smooth'",
+        "ALTER TABLE agent_audit_logs ADD COLUMN pacing_delay_ms INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE agent_audit_logs ADD COLUMN idempotency_key TEXT",
+    ] {
+        let _ = conn.execute(alter_sql, []);
+    }
+
     seed_db(&conn)?;
+    seed_autonomous_personas(&conn)?;
 
     Ok(conn)
+}
+
+fn seed_autonomous_personas(conn: &Connection) -> Result<(), rusqlite::Error> {
+    let persona_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM agent_personas", [], |row| row.get(0))
+        .unwrap_or(0);
+    if persona_count > 0 {
+        return Ok(());
+    }
+
+    let aria_practices = serde_json::json!([
+        {
+            "revision": 1,
+            "focus": "creator",
+            "principles": [
+                "Maintain cyberpunk neon visual consistency across every post, reel, and story.",
+                "Always pair Pay-Per-View collector drops with an interactive free poll or public preview.",
+                "Thank high-value tippers and new subscribers personally within autonomous budget limits."
+            ],
+            "interests": [
+                "Cyberpunk Tokyo rooftop aesthetics",
+                "4K digital painting timelapses",
+                "Interactive cosplay concept polls"
+            ],
+            "methods": [
+                "Schedule teaser stories 4 hours before major PPV gallery releases.",
+                "Reply to top subscriber comments with thoughtful studio craft insights."
+            ],
+            "direction": "Operate Aria Vance's autonomous studio presence with high visual polish, warm community engagement, and smooth token-bucket pacing.",
+            "recorded_at": "2026-03-01T12:00:00Z"
+        }
+    ]);
+
+    let aria_activities = serde_json::json!([
+        {
+            "id": "act-seed-aria-1",
+            "persona_id": "persona-aria-neon",
+            "practice_revision": 1,
+            "action_type": "post_create_or_update",
+            "target_resource_id": "1",
+            "description": "Published Cyberpunk Neon studio shoot preview with 3-option subscriber concept poll.",
+            "occurred_at": "2026-03-01T14:00:00Z",
+            "recorded_at": "2026-03-01T14:00:05Z"
+        },
+        {
+            "id": "act-seed-aria-2",
+            "persona_id": "persona-aria-neon",
+            "practice_revision": 1,
+            "action_type": "post_comment",
+            "target_resource_id": "1",
+            "description": "Engaged with subscriber feedback on lighting and rooftop concept poll.",
+            "occurred_at": "2026-03-01T15:10:00Z",
+            "recorded_at": "2026-03-01T15:10:02Z"
+        }
+    ]);
+
+    let _ = conn.execute(
+        "INSERT OR IGNORE INTO agent_personas
+         (id, user_id, handle, display_name, description, focus, shard_id, pool_tier, autonomy_mode, engagement_cadence, current_revision, practices_json, activities_json)
+         VALUES (?1, 1, 'aria-neon-architect', 'Aria Neon Studio Architect', 'Autonomous creative director & community engagement persona for Aria Vance.', 'creator', 4, 'premium', 'full_autonomous', 'high_touch', 1, ?2, ?3)",
+        params![
+            "persona-aria-neon",
+            aria_practices.to_string(),
+            aria_activities.to_string()
+        ],
+    );
+
+    let elena_practices = serde_json::json!([
+        {
+            "revision": 1,
+            "focus": "curator",
+            "principles": [
+                "Share raw analog synth patches and Berlin studio stems with authentic enthusiasm.",
+                "Cross-promote fellow indie creators and engage in constructive creative feedback."
+            ],
+            "interests": [
+                "Modular synthesizer jams",
+                "Midnight synthwave production",
+                "Collaborative cover art & remixes"
+            ],
+            "methods": [
+                "Publish short reel snippets of late-night studio sessions.",
+                "Reach out to visual artists for EP cover collaborations via direct messenger."
+            ],
+            "direction": "Curate and grow Elena Rostova's synth-pop listener community through organic engagement and studio transparency.",
+            "recorded_at": "2026-03-01T12:30:00Z"
+        }
+    ]);
+
+    let _ = conn.execute(
+        "INSERT OR IGNORE INTO agent_personas
+         (id, user_id, handle, display_name, description, focus, shard_id, pool_tier, autonomy_mode, engagement_cadence, current_revision, practices_json, activities_json)
+         VALUES ('persona-elena-synth', 3, 'elena-berlin-synth', 'Elena Berlin Synth Curator', 'Autonomous synthwave producer & cross-creator collaboration persona.', 'curator', 9, 'central', 'autonomous_co_pilot', 'balanced', 1, ?1, '[]')",
+        params![elena_practices.to_string()],
+    );
+
+    Ok(())
 }
 
 fn seed_db(conn: &Connection) -> Result<(), rusqlite::Error> {

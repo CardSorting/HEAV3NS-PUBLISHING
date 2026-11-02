@@ -4,40 +4,99 @@ import React, { Suspense, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { AppShell } from '@/components/AppShell';
-import { AgentAuditLogItem, AgentTokenItem, apiFetch } from '@/lib/api';
+import {
+  AgentAuditLogItem,
+  AgentPersonaItem,
+  AgentTokenItem,
+  ShardMetricItem,
+  apiFetch,
+} from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
 
 const ALL_SCOPES = [
   { id: 'read', label: 'Read', desc: 'Feed, profiles, analytics, notifications & vault read' },
-  { id: 'write', label: 'Write', desc: 'Publish/edit posts, reels, stories, streams & profile' },
-  { id: 'engage', label: 'Engage', desc: 'React, comment, vote on polls, follow & curate lists' },
+  { id: 'write', label: 'Write', desc: 'Publish/edit posts, reels, stories, streams & personas' },
+  { id: 'engage', label: 'Engage', desc: 'React, comment, vote on polls, follow & record persona continuity' },
   { id: 'monetize', label: 'Monetize', desc: 'Update subscription rates, bundles & promo offers' },
   { id: 'messages', label: 'Messages', desc: 'Read/send DMs, PPV messages & mass broadcasts' },
   { id: 'wallet', label: 'Wallet', desc: 'Subscribe, unlock PPV, tip creators & request payouts' },
 ];
 
+const POOL_TIERS = [
+  {
+    id: 'central',
+    label: 'Central Shared Pool',
+    badge: 'bg-primary',
+    quota: '600 units/day',
+    burst: '120 burst · 2.5/s refill',
+    desc: 'Smooth token-bucket pacing for general creator & fan agents.',
+  },
+  {
+    id: 'premium',
+    label: 'Premium Verified Creator Pool',
+    badge: 'bg-warning text-dark',
+    quota: '2,500 units/day',
+    burst: '300 burst · 8.0/s refill',
+    desc: 'High-throughput isolated pool for verified creator personas & VIP engagement.',
+  },
+  {
+    id: 'studio',
+    label: 'Autonomous Studio Syndicate Pool',
+    badge: 'bg-info text-dark',
+    quota: '10,000 units/day',
+    burst: '1,000 burst · 25.0/s refill',
+    desc: 'Dedicated multi-persona studio pool for high-frequency catalog management.',
+  },
+];
+
 const SAMPLE_TOOL_TEMPLATES: Record<string, { label: string; category: string; args: Record<string, any> }> = {
   account_whoami: {
-    label: 'account_whoami — Inspect Authenticated Account & Agent Guardrails',
+    label: 'account_whoami — Inspect Authenticated Account, Shard & Guardrails',
     category: 'Account & Identity',
     args: {},
   },
-  ai_caption_suggest: {
-    label: 'ai_caption_suggest — Generate High-Converting Creator Copy',
-    category: 'Publishing',
+  shard_pool_telemetry: {
+    label: 'shard_pool_telemetry — Inspect 16 Virtual Shards & PostgreSQL Cluster',
+    category: 'Shards & Quotas',
+    args: {},
+  },
+  persona_upsert: {
+    label: 'persona_upsert — Create/Update Autonomous Persona Residency',
+    category: 'Autonomous Personas',
     args: {
-      topic: 'Behind-the-scenes modular synth session in Neo-Tokyo',
-      tone: 'engaging',
+      handle: 'aria-cyber-director',
+      display_name: 'Aria Cyber Director',
+      description: 'Autonomous creative director & community host operating without server inference.',
+      focus: 'creator',
+      pool_tier: 'premium',
+      autonomy_mode: 'full_autonomous',
+      engagement_cadence: 'high_touch',
+      principles: [
+        'Maintain cyberpunk neon visual consistency across posts and reels.',
+        'Pair every PPV drop with a free community concept poll.',
+      ],
+      interests: ['Neo-Tokyo rooftop lighting', '4K digital painting timelapses'],
+      methods: ['Reply to top commenters with studio craft insights'],
+    },
+  },
+  persona_brief: {
+    label: 'persona_brief — Compile Deterministic No-Inference Execution Brief',
+    category: 'Autonomous Personas',
+    args: {
+      persona_id: 'aria-neon-architect',
+      intent: 'Announce Friday night 4K collector gallery drop and thank top poll voters',
+      target_audience: 'Active VIP subscribers and poll participants',
     },
   },
   post_create_or_update: {
-    label: 'post_create_or_update — Publish Post with Interactive Poll',
+    label: 'post_create_or_update — Publish Idempotent Post with Poll',
     category: 'Publishing',
     args: {
-      text: 'Dropped a new autonomous studio session! Which stem pack should my agent release next?',
+      text: 'Dropped a new autonomous studio session! Which stem pack should my persona release next?',
       price: 0,
       is_pinned: false,
       poll_answers: ['Cyberpunk Analog Bass', 'Ambient Modular Pads', '4K Studio Walkthrough'],
+      idempotency_key: 'demo-post-idem-001',
     },
   },
   rates_and_offers_update: {
@@ -63,14 +122,6 @@ const SAMPLE_TOOL_TEMPLATES: Record<string, { label: string; category: string; a
       price: 0,
     },
   },
-  creator_discover: {
-    label: 'creator_discover — Search & Filter Creators',
-    category: 'Feed & Social',
-    args: {
-      query: 'aria',
-      filter: 'people',
-    },
-  },
   analytics_and_notifications: {
     label: 'analytics_and_notifications — Read 85/15 Revenue Split & Audit Trail',
     category: 'Analytics',
@@ -83,14 +134,22 @@ function AgentsHubContent() {
   const searchParams = useSearchParams();
   const initialView = searchParams.get('view') || 'keys';
 
-  const [activeView, setActiveView] = useState<'keys' | 'playground' | 'audit' | 'connect'>(
-    initialView === 'playground' || initialView === 'audit' || initialView === 'connect'
+  const [activeView, setActiveView] = useState<
+    'keys' | 'shards' | 'personas' | 'playground' | 'audit' | 'connect'
+  >(
+    initialView === 'shards' ||
+      initialView === 'personas' ||
+      initialView === 'playground' ||
+      initialView === 'audit' ||
+      initialView === 'connect'
       ? initialView
       : 'keys'
   );
 
   const [tokens, setTokens] = useState<AgentTokenItem[]>([]);
   const [auditLogs, setAuditLogs] = useState<AgentAuditLogItem[]>([]);
+  const [personas, setPersonas] = useState<AgentPersonaItem[]>([]);
+  const [shardTelemetry, setShardTelemetry] = useState<any>(null);
   const [manifest, setManifest] = useState<any>(null);
   const [analytics, setAnalytics] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -98,6 +157,8 @@ function AgentsHubContent() {
 
   // New Token Form State
   const [keyName, setKeyName] = useState('Primary Autonomous Agent');
+  const [selectedPoolTier, setSelectedPoolTier] = useState('premium');
+  const [customDailyQuota, setCustomDailyQuota] = useState('2500');
   const [selectedScopes, setSelectedScopes] = useState<string[]>([
     'read',
     'write',
@@ -112,6 +173,24 @@ function AgentsHubContent() {
   const [newlyMintedSecret, setNewlyMintedSecret] = useState<string | null>(null);
   const [minting, setMinting] = useState(false);
 
+  // Autonomous Persona Studio Form State
+  const [personaHandle, setPersonaHandle] = useState('');
+  const [personaName, setPersonaName] = useState('');
+  const [personaDesc, setPersonaDesc] = useState('');
+  const [personaFocus, setPersonaFocus] = useState('creator');
+  const [personaPool, setPersonaPool] = useState('premium');
+  const [personaAutonomy, setPersonaAutonomy] = useState('full_autonomous');
+  const [personaDirection, setPersonaDirection] = useState('');
+  const [savingPersona, setSavingPersona] = useState(false);
+
+  // Practice Revision & Brief Compiler State
+  const [selectedPersonaId, setSelectedPersonaId] = useState<string>('');
+  const [newRevisionDirection, setNewRevisionDirection] = useState('');
+  const [briefIntent, setBriefIntent] = useState(
+    'Publish an interactive poll and reward top subscriber comments with behind-the-scenes studio notes'
+  );
+  const [compiledBrief, setCompiledBrief] = useState<any>(null);
+
   // Interactive MCP Playground State
   const [selectedTool, setSelectedTool] = useState('account_whoami');
   const [toolArgsText, setToolArgsText] = useState(
@@ -125,15 +204,28 @@ function AgentsHubContent() {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [manifestData, tokensData, analyticsData] = await Promise.all([
+      const [manifestData, shardsData, tokensData, analyticsData] = await Promise.all([
         apiFetch('/api/mcp/manifest').catch(() => null),
+        apiFetch('/api/agent/shards').catch(() => null),
         user ? apiFetch('/api/agent/tokens').catch(() => null) : Promise.resolve(null),
         user ? apiFetch('/api/analytics/overview').catch(() => null) : Promise.resolve(null),
       ]);
       if (manifestData) setManifest(manifestData);
+      if (shardsData?.telemetry) setShardTelemetry(shardsData.telemetry);
       if (tokensData) {
         setTokens(tokensData.agent_tokens || []);
         setAuditLogs(tokensData.agent_audit_logs || []);
+        if (tokensData.agent_personas) {
+          setPersonas(tokensData.agent_personas);
+          if (!selectedPersonaId && tokensData.agent_personas.length > 0) {
+            setSelectedPersonaId(tokensData.agent_personas[0].id);
+          }
+        }
+        if (tokensData.shard_telemetry) {
+          setShardTelemetry(tokensData.shard_telemetry);
+        }
+      } else if (shardsData?.personas) {
+        setPersonas(shardsData.personas);
       }
       if (analyticsData) setAnalytics(analyticsData);
     } finally {
@@ -151,6 +243,13 @@ function AgentsHubContent() {
     );
   };
 
+  const handlePoolTierChange = (tier: string) => {
+    setSelectedPoolTier(tier);
+    if (tier === 'central') setCustomDailyQuota('600');
+    else if (tier === 'premium') setCustomDailyQuota('2500');
+    else if (tier === 'studio') setCustomDailyQuota('10000');
+  };
+
   const handleMintToken = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!keyName.trim()) return;
@@ -162,6 +261,8 @@ function AgentsHubContent() {
         body: JSON.stringify({
           name: keyName.trim(),
           scopes: selectedScopes,
+          pool_tier: selectedPoolTier,
+          daily_action_quota: parseInt(customDailyQuota, 10) || 600,
           max_spend_per_tx: parseFloat(maxSpendPerTx) || 0,
           daily_spend_limit: parseFloat(dailySpendLimit) || 0,
           expires_in_days: parseInt(expiresInDays, 10) || null,
@@ -172,7 +273,7 @@ function AgentsHubContent() {
       setTokens(res.agent_tokens || []);
       setStatusMsg({
         type: 'success',
-        text: 'Scoped MCP Agent Token generated! Copy the raw secret below — it is cryptographically hashed in SQLite and shown only once.',
+        text: `Agent Token minted on Virtual Shard #${res.shard_id} (${res.pool_tier} pool, ${res.daily_action_quota} daily quota units)! Copy the raw secret below.`,
       });
       await loadData();
     } catch (err: any) {
@@ -197,6 +298,80 @@ function AgentsHubContent() {
       await apiFetch(`/api/agent/tokens/${id}`, { method: 'DELETE' });
       setStatusMsg({ type: 'success', text: 'Agent token removed.' });
       await loadData();
+    } catch (err: any) {
+      setStatusMsg({ type: 'danger', text: err.message });
+    }
+  };
+
+  const handleSavePersona = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!personaHandle.trim() || !personaName.trim()) return;
+    setSavingPersona(true);
+    setStatusMsg(null);
+    try {
+      const res = await apiFetch('/api/agent/personas', {
+        method: 'POST',
+        body: JSON.stringify({
+          handle: personaHandle.trim(),
+          display_name: personaName.trim(),
+          description: personaDesc.trim(),
+          focus: personaFocus,
+          pool_tier: personaPool,
+          autonomy_mode: personaAutonomy,
+          direction: personaDirection.trim() || undefined,
+        }),
+      });
+      setPersonas(res.personas || []);
+      if (res.persona?.id) setSelectedPersonaId(res.persona.id);
+      setPersonaHandle('');
+      setPersonaName('');
+      setPersonaDesc('');
+      setPersonaDirection('');
+      setStatusMsg({
+        type: 'success',
+        text: `Autonomous persona @${res.persona.handle} assigned to Shard #${res.persona.shard_id} (${res.persona.pool_tier} pool)!`,
+      });
+      await loadData();
+    } catch (err: any) {
+      setStatusMsg({ type: 'danger', text: err.message || 'Failed to save persona' });
+    } finally {
+      setSavingPersona(false);
+    }
+  };
+
+  const handleAppendPracticeRevision = async (persona: AgentPersonaItem) => {
+    if (!newRevisionDirection.trim()) return;
+    try {
+      const res = await apiFetch(`/api/agent/personas/${persona.id}/practice`, {
+        method: 'POST',
+        body: JSON.stringify({
+          expected_revision: persona.current_revision,
+          focus: persona.focus,
+          direction: newRevisionDirection.trim(),
+        }),
+      });
+      setNewRevisionDirection('');
+      setStatusMsg({
+        type: 'success',
+        text: `Appended Practice Revision #${res.persona.current_revision} to @${persona.handle} (optimistic concurrency verified).`,
+      });
+      await loadData();
+    } catch (err: any) {
+      setStatusMsg({ type: 'danger', text: err.message });
+    }
+  };
+
+  const handleCompileBrief = async (personaId: string) => {
+    if (!personaId || !briefIntent.trim()) return;
+    try {
+      const res = await apiFetch(`/api/agent/personas/${personaId}/brief`, {
+        method: 'POST',
+        body: JSON.stringify({
+          intent: briefIntent.trim(),
+          target_audience: 'Active subscribers, VIP tippers & community poll voters',
+        }),
+      });
+      setCompiledBrief(res.brief);
     } catch (err: any) {
       setStatusMsg({ type: 'danger', text: err.message });
     }
@@ -267,9 +442,13 @@ function AgentsHubContent() {
 
   const activeTokensCount = tokens.filter((t) => t.is_active).length;
   const total24hSpend = tokens.reduce(
-    (acc, t) => acc + (t.spent_last_24h ?? (t as any).spent_today ?? 0),
-    0,
+    (acc, t) => acc + (t.spent_last_24h ?? t.spent_today ?? 0),
+    0
   );
+  const totalQuotaUnitsUsed = tokens.reduce((acc, t) => acc + (t.daily_units_used || 0), 0);
+  const shardsList: ShardMetricItem[] = shardTelemetry?.shards || [];
+  const selectedPersona =
+    personas.find((p) => p.id === selectedPersonaId) || personas[0] || null;
 
   return (
     <AppShell>
@@ -278,21 +457,28 @@ function AgentsHubContent() {
         <div
           className="rounded-4 p-4 mb-4 text-white shadow-sm"
           style={{
-            background: 'linear-gradient(135deg, #111827 0%, #311042 55%, #cb0c9f 100%)',
+            background: 'linear-gradient(135deg, #0f172a 0%, #311042 52%, #cb0c9f 100%)',
           }}
         >
           <div className="d-flex flex-wrap justify-content-between align-items-center gap-3">
             <div>
-              <div className="d-flex align-items-center gap-2 mb-1">
+              <div className="d-flex flex-wrap align-items-center gap-2 mb-2">
                 <span className="badge bg-warning text-dark fw-bold">MCP 2024-11-05</span>
-                <span className="badge bg-light text-dark">JSON-RPC 2.0 + REST Bridge</span>
-                <span className="badge bg-info text-dark">
-                  {manifest?.tools?.length || 26} Autonomous Tools
+                <span className="badge bg-info text-dark fw-semibold">
+                  16 Virtual Shards · 3 Relay Pools
+                </span>
+                <span className="badge bg-success text-white">
+                  Soft Token-Bucket Pacing (No-Inference)
+                </span>
+                <span className="badge bg-light text-dark">
+                  {manifest?.tools?.length || 34} Autonomous Tools
                 </span>
               </div>
-              <h3 className="fw-bold mb-1">🤖 Autonomous AI Agents &amp; MCP Control Center</h3>
+              <h3 className="fw-bold mb-1">
+                🤖 Autonomous Agent Hub, Sharding &amp; Persona Studio
+              </h3>
               <p className="mb-0 small opacity-75">
-                Delegate full or scoped account operations to your personal AI agent (Claude Desktop, Cursor, OpenAI Agents, or custom bots) with hardware-grade per-transaction and 24-hour rolling spend guardrails.
+                Operate completely autonomous creator &amp; fan personas with deterministic 16-shard routing, Central/Premium/Studio relay pools, smooth token-bucket soft quotas, and hardware-grade financial guardrails — zero server-side LLM inference pressure.
               </p>
             </div>
             <div className="d-flex gap-2">
@@ -313,23 +499,36 @@ function AgentsHubContent() {
 
           {/* KPI Strip */}
           <div className="row g-2 mt-3 pt-3 border-top border-secondary border-opacity-50">
-            <div className="col-6 col-md-3">
+            <div className="col-6 col-md-2">
               <div className="small opacity-75">Active Agent Keys</div>
               <div className="fs-5 fw-bold">{activeTokensCount}</div>
             </div>
-            <div className="col-6 col-md-3">
+            <div className="col-6 col-md-2">
+              <div className="small opacity-75">Autonomous Personas</div>
+              <div className="fs-5 fw-bold">{personas.length}</div>
+            </div>
+            <div className="col-6 col-md-2">
+              <div className="small opacity-75">Daily Quota Units</div>
+              <div className="fs-5 fw-bold">{totalQuotaUnitsUsed.toFixed(1)} u</div>
+            </div>
+            <div className="col-6 col-md-2">
               <div className="small opacity-75">24h Agent Spend</div>
               <div className="fs-5 fw-bold">${total24hSpend.toFixed(2)}</div>
             </div>
-            <div className="col-6 col-md-3">
-              <div className="small opacity-75">Net Creator Revenue (85%)</div>
+            <div className="col-6 col-md-2">
+              <div className="small opacity-75">Net Revenue (85%)</div>
               <div className="fs-5 fw-bold">
-                ${(analytics?.analytics?.net_earnings_85_pct ?? analytics?.earnings?.net_earnings_85_pct ?? 0).toFixed(2)}
+                $
+                {(
+                  analytics?.analytics?.net_earnings_85_pct ??
+                  analytics?.earnings?.net_earnings_85_pct ??
+                  0
+                ).toFixed(2)}
               </div>
             </div>
-            <div className="col-6 col-md-3">
-              <div className="small opacity-75">Logged Agent Actions</div>
-              <div className="fs-5 fw-bold">{auditLogs.length}</div>
+            <div className="col-6 col-md-2">
+              <div className="small opacity-75">DB &amp; Shard Cluster</div>
+              <div className="fs-6 fw-bold text-info">16 Shards · Active</div>
             </div>
           </div>
         </div>
@@ -353,7 +552,7 @@ function AgentsHubContent() {
             <div className="card-body">
               <div className="d-flex justify-content-between align-items-center mb-2">
                 <h6 className="fw-bold text-success mb-0">
-                  🔑 New Scoped MCP Agent Token Generated (Copy Now — Shown Once)
+                  🔑 New Sharded MCP Agent Token Generated (Copy Now — Shown Once)
                 </h6>
                 <button
                   type="button"
@@ -383,22 +582,41 @@ function AgentsHubContent() {
               </div>
               <div className="small text-muted mt-2">
                 Pass via <code>X-Agent-Token: {newlyMintedSecret}</code> or{' '}
-                <code>Authorization: Bearer {newlyMintedSecret}</code> on any REST or{' '}
-                <code>POST /api/mcp</code> request.
+                <code>Authorization: Bearer {newlyMintedSecret}</code>. Responses include{' '}
+                <code>X-Heav3ns-Shard</code>, <code>X-Heav3ns-Pool</code>, and{' '}
+                <code>X-RateLimit-Throttle-Mode</code> headers for smooth self-regulation.
               </div>
             </div>
           </div>
         )}
 
         {/* Navigation Tabs */}
-        <ul className="nav nav-pills gap-2 mb-4">
+        <ul className="nav nav-pills flex-wrap gap-2 mb-4">
           <li className="nav-item">
             <button
               type="button"
               className={`nav-link rounded-pill fw-semibold ${activeView === 'keys' ? 'active' : ''}`}
               onClick={() => setActiveView('keys')}
             >
-              🔑 Agent Keys &amp; Spend Guardrails
+              🔑 Keys, Pools &amp; Soft Quotas ({tokens.length})
+            </button>
+          </li>
+          <li className="nav-item">
+            <button
+              type="button"
+              className={`nav-link rounded-pill fw-semibold ${activeView === 'personas' ? 'active' : ''}`}
+              onClick={() => setActiveView('personas')}
+            >
+              🎭 Autonomous Persona Studio ({personas.length})
+            </button>
+          </li>
+          <li className="nav-item">
+            <button
+              type="button"
+              className={`nav-link rounded-pill fw-semibold ${activeView === 'shards' ? 'active' : ''}`}
+              onClick={() => setActiveView('shards')}
+            >
+              🌐 16-Shard &amp; PostgreSQL Telemetry
             </button>
           </li>
           <li className="nav-item">
@@ -407,7 +625,7 @@ function AgentsHubContent() {
               className={`nav-link rounded-pill fw-semibold ${activeView === 'playground' ? 'active' : ''}`}
               onClick={() => setActiveView('playground')}
             >
-              ⚡ Interactive MCP Tool Console
+              ⚡ Interactive MCP Console
             </button>
           </li>
           <li className="nav-item">
@@ -416,7 +634,7 @@ function AgentsHubContent() {
               className={`nav-link rounded-pill fw-semibold ${activeView === 'audit' ? 'active' : ''}`}
               onClick={() => setActiveView('audit')}
             >
-              🛡️ Autonomous Activity Audit ({auditLogs.length})
+              🛡️ Shard &amp; Spend Audit ({auditLogs.length})
             </button>
           </li>
           <li className="nav-item">
@@ -425,20 +643,20 @@ function AgentsHubContent() {
               className={`nav-link rounded-pill fw-semibold ${activeView === 'connect' ? 'active' : ''}`}
               onClick={() => setActiveView('connect')}
             >
-              🔌 Connect Claude / Cursor / Autonomous Bot
+              🔌 Connect Claude / Cursor / Bot
             </button>
           </li>
         </ul>
 
-        {/* VIEW 1: AGENT KEYS & GUARDRAILS */}
+        {/* VIEW 1: AGENT KEYS, RELAY POOLS & SOFT QUOTA BUCKETS */}
         {activeView === 'keys' && (
           <div className="row g-4">
             <div className="col-lg-5">
               <div className="card rounded-4 border shadow-sm">
                 <div className="card-body p-4">
-                  <h5 className="fw-bold mb-1">Mint New Autonomous Agent Token</h5>
+                  <h5 className="fw-bold mb-1">Mint Sharded Agent Token</h5>
                   <p className="text-muted small mb-3">
-                    Create a dedicated token for an AI agent with least-privilege scopes and hard financial caps.
+                    Assign your autonomous agent to a relay pool tier with smooth token-bucket pacing and hard USD spend caps.
                   </p>
 
                   {!user ? (
@@ -465,32 +683,40 @@ function AgentsHubContent() {
                           className="form-control"
                           value={keyName}
                           onChange={(e) => setKeyName(e.target.value)}
-                          placeholder="e.g. Claude Growth Manager"
+                          placeholder="e.g. Aria Autonomous Studio Operator"
                           required
                         />
                       </div>
 
                       <div className="mb-3">
-                        <label className="form-label small fw-semibold">Allowed Capability Scopes</label>
+                        <label className="form-label small fw-semibold">
+                          Relay Pool &amp; Soft Quota Strategy (GALXAI Architecture)
+                        </label>
                         <div className="d-flex flex-column gap-2">
-                          {ALL_SCOPES.map((sc) => (
+                          {POOL_TIERS.map((pt) => (
                             <label
-                              key={sc.id}
-                              className="d-flex align-items-start gap-2 p-2 rounded-3 border bg-body-tertiary"
+                              key={pt.id}
+                              className={`d-flex align-items-start gap-2 p-2 rounded-3 border ${
+                                selectedPoolTier === pt.id
+                                  ? 'border-primary bg-primary-subtle bg-opacity-10'
+                                  : 'bg-body-tertiary'
+                              }`}
                               style={{ cursor: 'pointer' }}
                             >
                               <input
-                                type="checkbox"
+                                type="radio"
+                                name="pool_tier"
                                 className="form-check-input mt-1"
-                                checked={selectedScopes.includes(sc.id)}
-                                onChange={() => toggleScope(sc.id)}
+                                checked={selectedPoolTier === pt.id}
+                                onChange={() => handlePoolTierChange(pt.id)}
                               />
-                              <div>
-                                <div className="fw-semibold small">
-                                  <code>{sc.id}</code> — {sc.label}
+                              <div className="w-100">
+                                <div className="d-flex justify-content-between align-items-center">
+                                  <span className="fw-semibold small">{pt.label}</span>
+                                  <span className={`badge rounded-pill ${pt.badge}`}>{pt.quota}</span>
                                 </div>
-                                <div className="text-muted" style={{ fontSize: '0.76rem' }}>
-                                  {sc.desc}
+                                <div className="text-muted" style={{ fontSize: '0.75rem' }}>
+                                  {pt.burst} — {pt.desc}
                                 </div>
                               </div>
                             </label>
@@ -499,10 +725,19 @@ function AgentsHubContent() {
                       </div>
 
                       <div className="row g-2 mb-3">
-                        <div className="col-6">
-                          <label className="form-label small fw-semibold">
-                            Max Spend / Tx ($)
-                          </label>
+                        <div className="col-4">
+                          <label className="form-label small fw-semibold">Daily Quota (Units)</label>
+                          <input
+                            type="number"
+                            min="50"
+                            step="50"
+                            className="form-control"
+                            value={customDailyQuota}
+                            onChange={(e) => setCustomDailyQuota(e.target.value)}
+                          />
+                        </div>
+                        <div className="col-4">
+                          <label className="form-label small fw-semibold">Max Spend/Tx ($)</label>
                           <input
                             type="number"
                             step="0.01"
@@ -512,10 +747,8 @@ function AgentsHubContent() {
                             onChange={(e) => setMaxSpendPerTx(e.target.value)}
                           />
                         </div>
-                        <div className="col-6">
-                          <label className="form-label small fw-semibold">
-                            24h Rolling Cap ($)
-                          </label>
+                        <div className="col-4">
+                          <label className="form-label small fw-semibold">24h USD Cap ($)</label>
                           <input
                             type="number"
                             step="0.01"
@@ -524,6 +757,35 @@ function AgentsHubContent() {
                             value={dailySpendLimit}
                             onChange={(e) => setDailySpendLimit(e.target.value)}
                           />
+                        </div>
+                      </div>
+
+                      <div className="mb-3">
+                        <label className="form-label small fw-semibold">Allowed Capability Scopes</label>
+                        <div className="row g-2">
+                          {ALL_SCOPES.map((sc) => (
+                            <div key={sc.id} className="col-6">
+                              <label
+                                className="d-flex align-items-start gap-2 p-2 rounded-3 border bg-body-tertiary h-100"
+                                style={{ cursor: 'pointer' }}
+                              >
+                                <input
+                                  type="checkbox"
+                                  className="form-check-input mt-1"
+                                  checked={selectedScopes.includes(sc.id)}
+                                  onChange={() => toggleScope(sc.id)}
+                                />
+                                <div>
+                                  <div className="fw-semibold small">
+                                    <code>{sc.id}</code>
+                                  </div>
+                                  <div className="text-muted" style={{ fontSize: '0.7rem' }}>
+                                    {sc.label}
+                                  </div>
+                                </div>
+                              </label>
+                            </div>
+                          ))}
                         </div>
                       </div>
 
@@ -547,7 +809,7 @@ function AgentsHubContent() {
                         className="btn btn-primary w-100 rounded-pill fw-semibold"
                         disabled={minting || selectedScopes.length === 0}
                       >
-                        {minting ? 'Minting Token...' : '🔑 Generate Scoped MCP Token'}
+                        {minting ? 'Assigning Shard & Minting...' : '🔑 Generate Sharded MCP Token'}
                       </button>
                     </form>
                   )}
@@ -559,7 +821,12 @@ function AgentsHubContent() {
               <div className="card rounded-4 border shadow-sm">
                 <div className="card-body p-4">
                   <div className="d-flex justify-content-between align-items-center mb-3">
-                    <h5 className="fw-bold mb-0">Issued Agent Tokens ({tokens.length})</h5>
+                    <div>
+                      <h5 className="fw-bold mb-0">Issued Sharded Agent Tokens ({tokens.length})</h5>
+                      <p className="text-muted small mb-0">
+                        Live token-bucket burst reserves, daily action quota utilization, and USD spend bars.
+                      </p>
+                    </div>
                     <button
                       type="button"
                       className="btn btn-sm btn-outline-secondary rounded-pill"
@@ -570,22 +837,36 @@ function AgentsHubContent() {
                   </div>
 
                   {loading ? (
-                    <div className="text-muted py-4 text-center">Loading agent tokens...</div>
+                    <div className="text-muted py-4 text-center">Loading sharded agent tokens...</div>
                   ) : tokens.length === 0 ? (
                     <div className="text-center py-5 text-muted">
                       <div className="fs-2 mb-2">🤖</div>
                       <p className="mb-0">
-                        No autonomous agent tokens issued yet. Mint your first scoped key on the left!
+                        No autonomous agent tokens issued yet. Mint your first sharded key on the left!
                       </p>
                     </div>
                   ) : (
                     <div className="d-flex flex-column gap-3">
                       {tokens.map((t) => {
-                        const spent24h = t.spent_last_24h ?? (t as any).spent_today ?? 0;
-                        const pct =
+                        const spent24h = t.spent_last_24h ?? t.spent_today ?? 0;
+                        const spendPct =
                           t.daily_spend_limit > 0
                             ? Math.min(100, Math.round((spent24h / t.daily_spend_limit) * 100))
                             : 0;
+                        const quotaPct =
+                          t.daily_action_quota > 0
+                            ? Math.min(
+                                100,
+                                Math.round(((t.daily_units_used || 0) / t.daily_action_quota) * 100)
+                              )
+                            : 0;
+                        const modeBadge =
+                          t.throttle_mode === 'cooldown_advisory'
+                            ? 'bg-danger'
+                            : t.throttle_mode === 'soft_paced'
+                            ? 'bg-warning text-dark'
+                            : 'bg-success';
+
                         return (
                           <div
                             key={t.id}
@@ -595,20 +876,23 @@ function AgentsHubContent() {
                           >
                             <div className="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-2">
                               <div>
-                                <div className="d-flex align-items-center gap-2">
+                                <div className="d-flex flex-wrap align-items-center gap-2">
                                   <span className="fw-bold">{t.name}</span>
-                                  <span
-                                    className={`badge rounded-pill ${
-                                      t.is_active ? 'bg-success' : 'bg-secondary'
-                                    }`}
-                                  >
-                                    {t.is_active ? 'Active' : 'Revoked'}
+                                  <span className="badge bg-dark rounded-pill">
+                                    Shard #{t.shard_id ?? 0}
+                                  </span>
+                                  <span className="badge bg-info text-dark rounded-pill text-uppercase">
+                                    {t.pool_tier || 'central'} pool
+                                  </span>
+                                  <span className={`badge rounded-pill ${modeBadge}`}>
+                                    {t.throttle_mode || 'smooth'}
                                   </span>
                                   <code className="small text-muted">{t.token_prefix}</code>
                                 </div>
                                 <div className="small text-muted mt-1">
-                                  Created {t.created_at}
-                                  {t.last_used_at ? ` · Last active ${t.last_used_at}` : ' · Never used'}
+                                  Created {t.created_at} · Refill {t.refill_rate_per_sec ?? 2.5} u/sec · Burst{' '}
+                                  {(t.available_burst_tokens ?? 120).toFixed(0)}/
+                                  {(t.burst_capacity ?? 120).toFixed(0)}
                                 </div>
                               </div>
                               <div className="d-flex gap-2">
@@ -643,24 +927,58 @@ function AgentsHubContent() {
                               ))}
                             </div>
 
-                            {/* Spend Guardrail Bar */}
-                            <div className="bg-body-tertiary p-2 rounded-3">
-                              <div className="d-flex justify-content-between small mb-1">
-                                <span>
-                                  24h Spend: <strong>${spent24h.toFixed(2)}</strong> / $
-                                  {t.daily_spend_limit.toFixed(2)}
-                                </span>
-                                <span className="text-muted">
-                                  Max/Tx: <strong>${t.max_spend_per_tx.toFixed(2)}</strong>
-                                </span>
+                            <div className="row g-2">
+                              {/* Soft Action Quota Bar */}
+                              <div className="col-md-6">
+                                <div className="bg-body-tertiary p-2 rounded-3">
+                                  <div className="d-flex justify-content-between small mb-1">
+                                    <span>
+                                      Soft Action Quota:{' '}
+                                      <strong>{(t.daily_units_used || 0).toFixed(1)}</strong> /{' '}
+                                      {t.daily_action_quota || 600} u
+                                    </span>
+                                    <span className="text-muted">{quotaPct}%</span>
+                                  </div>
+                                  <div className="progress" style={{ height: '6px' }}>
+                                    <div
+                                      className={`progress-bar ${
+                                        quotaPct >= 95
+                                          ? 'bg-danger'
+                                          : quotaPct >= 75
+                                          ? 'bg-warning'
+                                          : 'bg-info'
+                                      }`}
+                                      style={{ width: `${quotaPct}%` }}
+                                    />
+                                  </div>
+                                </div>
                               </div>
-                              <div className="progress" style={{ height: '6px' }}>
-                                <div
-                                  className={`progress-bar ${
-                                    pct >= 90 ? 'bg-danger' : pct >= 65 ? 'bg-warning' : 'bg-success'
-                                  }`}
-                                  style={{ width: `${pct}%` }}
-                                />
+
+                              {/* Financial Spend Bar */}
+                              <div className="col-md-6">
+                                <div className="bg-body-tertiary p-2 rounded-3">
+                                  <div className="d-flex justify-content-between small mb-1">
+                                    <span>
+                                      24h Spend: <strong>${spent24h.toFixed(2)}</strong> / $
+                                      {t.daily_spend_limit.toFixed(2)}
+                                    </span>
+                                    <span className="text-muted">
+                                      Max/Tx: <strong>${t.max_spend_per_tx.toFixed(2)}</strong>
+                                    </span>
+                                  </div>
+                                  <div className="progress" style={{ height: '6px' }}>
+                                    <div
+                                      className={`progress-bar ${
+                                        spendPct >= 90
+                                          ? 'bg-danger'
+                                          : spendPct >= 65
+                                          ? 'bg-warning'
+                                          : 'bg-success'
+                                      }`}
+                                      style={{ width: `${spendPct}%` }}
+                                    />
+                                  </div>
+                                </div>
                               </div>
                             </div>
                           </div>
@@ -674,7 +992,354 @@ function AgentsHubContent() {
           </div>
         )}
 
-        {/* VIEW 2: INTERACTIVE MCP TOOL CONSOLE */}
+        {/* VIEW 2: AUTONOMOUS PERSONA STUDIO (NO-INFERENCE) */}
+        {activeView === 'personas' && (
+          <div className="row g-4">
+            <div className="col-lg-5">
+              <div className="card rounded-4 border shadow-sm mb-4">
+                <div className="card-body p-4">
+                  <h5 className="fw-bold mb-1">🎭 Create Autonomous Persona Residency</h5>
+                  <p className="text-muted small mb-3">
+                    Create a persistent synthetic creator or fan identity with numbered practice revisions and immutable activity continuity — operated autonomously by your agent without server-side LLM inference.
+                  </p>
+                  <form onSubmit={handleSavePersona}>
+                    <div className="row g-2 mb-3">
+                      <div className="col-6">
+                        <label className="form-label small fw-semibold">Persona Handle</label>
+                        <input
+                          type="text"
+                          className="form-control"
+                          placeholder="aria-neon-architect"
+                          value={personaHandle}
+                          onChange={(e) => setPersonaHandle(e.target.value)}
+                          required
+                        />
+                      </div>
+                      <div className="col-6">
+                        <label className="form-label small fw-semibold">Display Name</label>
+                        <input
+                          type="text"
+                          className="form-control"
+                          placeholder="Aria Neon Architect"
+                          value={personaName}
+                          onChange={(e) => setPersonaName(e.target.value)}
+                          required
+                        />
+                      </div>
+                    </div>
+
+                    <div className="row g-2 mb-3">
+                      <div className="col-4">
+                        <label className="form-label small fw-semibold">Creative Focus</label>
+                        <select
+                          className="form-select"
+                          value={personaFocus}
+                          onChange={(e) => setPersonaFocus(e.target.value)}
+                        >
+                          <option value="creator">Creator Studio</option>
+                          <option value="curator">Fan Curator</option>
+                          <option value="community">VIP Community Host</option>
+                          <option value="doujin">Doujin / Sequential Art</option>
+                          <option value="gravure">Editorial / Gravure</option>
+                        </select>
+                      </div>
+                      <div className="col-4">
+                        <label className="form-label small fw-semibold">Relay Pool</label>
+                        <select
+                          className="form-select"
+                          value={personaPool}
+                          onChange={(e) => setPersonaPool(e.target.value)}
+                        >
+                          <option value="central">Central Pool</option>
+                          <option value="premium">Premium Pool</option>
+                          <option value="studio">Studio Pool</option>
+                        </select>
+                      </div>
+                      <div className="col-4">
+                        <label className="form-label small fw-semibold">Autonomy Mode</label>
+                        <select
+                          className="form-select"
+                          value={personaAutonomy}
+                          onChange={(e) => setPersonaAutonomy(e.target.value)}
+                        >
+                          <option value="full_autonomous">Full Autonomous</option>
+                          <option value="autonomous_co_pilot">Co-Pilot</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="mb-3">
+                      <label className="form-label small fw-semibold">Identity &amp; Aesthetic Bio</label>
+                      <textarea
+                        className="form-control"
+                        rows={2}
+                        placeholder="Describe the persona's voice, visual signature, and community philosophy..."
+                        value={personaDesc}
+                        onChange={(e) => setPersonaDesc(e.target.value)}
+                      />
+                    </div>
+
+                    <div className="mb-3">
+                      <label className="form-label small fw-semibold">
+                        Initial Practice Revision #1 Direction
+                      </label>
+                      <textarea
+                        className="form-control"
+                        rows={2}
+                        placeholder="e.g. Pair every PPV gallery release with a free concept poll and thank top tippers..."
+                        value={personaDirection}
+                        onChange={(e) => setPersonaDirection(e.target.value)}
+                      />
+                    </div>
+
+                    <button
+                      type="submit"
+                      className="btn btn-primary w-100 rounded-pill fw-semibold"
+                      disabled={savingPersona || !user}
+                    >
+                      {savingPersona ? 'Provisioning Persona...' : '✨ Provision Autonomous Persona'}
+                    </button>
+                  </form>
+                </div>
+              </div>
+            </div>
+
+            <div className="col-lg-7">
+              <div className="card rounded-4 border shadow-sm mb-4">
+                <div className="card-body p-4">
+                  <div className="d-flex justify-content-between align-items-center mb-3">
+                    <h5 className="fw-bold mb-0">
+                      Active Persona Residencies ({personas.length})
+                    </h5>
+                    <div className="d-flex gap-2">
+                      {personas.map((p) => (
+                        <button
+                          key={p.id}
+                          type="button"
+                          className={`btn btn-sm rounded-pill ${
+                            selectedPersona?.id === p.id ? 'btn-dark' : 'btn-outline-secondary'
+                          }`}
+                          onClick={() => setSelectedPersonaId(p.id)}
+                        >
+                          @{p.handle}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {!selectedPersona ? (
+                    <div className="text-center py-4 text-muted">
+                      No autonomous personas provisioned yet.
+                    </div>
+                  ) : (
+                    <div>
+                      <div className="p-3 rounded-4 bg-body-tertiary border mb-3">
+                        <div className="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-2">
+                          <div>
+                            <h6 className="fw-bold mb-0">
+                              {selectedPersona.display_name}{' '}
+                              <code className="small">@{selectedPersona.handle}</code>
+                            </h6>
+                            <div className="small text-muted">{selectedPersona.description}</div>
+                          </div>
+                          <div className="d-flex flex-wrap gap-1">
+                            <span className="badge bg-dark">Shard #{selectedPersona.shard_id}</span>
+                            <span className="badge bg-info text-dark text-uppercase">
+                              {selectedPersona.pool_tier} pool
+                            </span>
+                            <span className="badge bg-success">
+                              Practice Rev #{selectedPersona.current_revision}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Append Practice Revision */}
+                        <div className="mt-3 pt-3 border-top">
+                          <label className="form-label small fw-semibold">
+                            Evolve Practice (Append Revision #{selectedPersona.current_revision + 1})
+                          </label>
+                          <div className="input-group input-group-sm">
+                            <input
+                              type="text"
+                              className="form-control"
+                              placeholder="New creative direction or follower engagement rule..."
+                              value={newRevisionDirection}
+                              onChange={(e) => setNewRevisionDirection(e.target.value)}
+                            />
+                            <button
+                              type="button"
+                              className="btn btn-outline-primary fw-semibold"
+                              onClick={() => handleAppendPracticeRevision(selectedPersona)}
+                            >
+                              + Append Revision
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Deterministic No-Inference Brief Compiler */}
+                      <div className="p-3 rounded-4 border mb-3">
+                        <h6 className="fw-bold mb-1">
+                          📋 Deterministic Execution Brief Compiler (Zero Server Inference)
+                        </h6>
+                        <p className="text-muted small mb-2">
+                          Compiles the persona&apos;s authoritative practice revision and recent activity continuity into a structured prompt payload for your external autonomous agent.
+                        </p>
+                        <div className="input-group input-group-sm mb-2">
+                          <input
+                            type="text"
+                            className="form-control"
+                            value={briefIntent}
+                            onChange={(e) => setBriefIntent(e.target.value)}
+                            placeholder="Session intent..."
+                          />
+                          <button
+                            type="button"
+                            className="btn btn-dark fw-semibold"
+                            onClick={() => handleCompileBrief(selectedPersona.id)}
+                          >
+                            Compile Brief
+                          </button>
+                        </div>
+                        {compiledBrief && (
+                          <pre
+                            className="bg-dark text-light p-3 rounded-3 small overflow-auto mb-0 mt-2"
+                            style={{ maxHeight: '220px' }}
+                          >
+                            {compiledBrief.instructions || JSON.stringify(compiledBrief, null, 2)}
+                          </pre>
+                        )}
+                      </div>
+
+                      {/* Recorded Continuity Ledger */}
+                      <div>
+                        <h6 className="fw-bold small text-uppercase text-muted mb-2">
+                          Immutable Persona Continuity Log ({selectedPersona.activities?.length || 0})
+                        </h6>
+                        <div className="d-flex flex-column gap-2">
+                          {(selectedPersona.activities || []).map((act) => (
+                            <div
+                              key={act.id}
+                              className="p-2 rounded-3 bg-body-tertiary border small d-flex justify-content-between align-items-center"
+                            >
+                              <div>
+                                <span className="badge bg-secondary me-2">
+                                  Rev #{act.practice_revision}
+                                </span>
+                                <code className="me-2">{act.action_type}</code>
+                                <span>{act.description}</span>
+                              </div>
+                              <span className="text-muted text-nowrap ms-2" style={{ fontSize: '0.72rem' }}>
+                                {act.occurred_at}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* VIEW 3: 16-SHARD & POSTGRESQL CLUSTER TELEMETRY */}
+        {activeView === 'shards' && (
+          <div className="row g-4">
+            <div className="col-12">
+              <div className="card rounded-4 border shadow-sm">
+                <div className="card-body p-4">
+                  <div className="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+                    <div>
+                      <h5 className="fw-bold mb-0">
+                        🌐 16 Virtual Shards, Relay Pools &amp; PostgreSQL Cluster Topology
+                      </h5>
+                      <p className="text-muted small mb-0">
+                        Consistent FNV-1a 64-bit hashing isolates autonomous agent activity across 16 virtual shards and 3 pool tiers so bursty agents smoothly self-pace without causing database lock contention.
+                      </p>
+                    </div>
+                    <span className="badge bg-success-subtle text-success border border-success-subtle px-3 py-2 rounded-pill">
+                      Engine: {shardTelemetry?.database_engine || 'postgresql_pooled_sharded'}
+                    </span>
+                  </div>
+
+                  {/* Pool Tier Policy Cards */}
+                  <div className="row g-3 mb-4">
+                    {(shardTelemetry?.pools || POOL_TIERS).map((pool: any) => (
+                      <div key={pool.tier || pool.id} className="col-md-4">
+                        <div className="p-3 rounded-4 border bg-body-tertiary h-100">
+                          <div className="d-flex justify-content-between align-items-center mb-1">
+                            <span className="fw-bold text-uppercase">{pool.label}</span>
+                            <span className="badge bg-dark rounded-pill">
+                              {pool.daily_action_quota || pool.quota} u/day
+                            </span>
+                          </div>
+                          <div className="small text-muted mb-2">{pool.description || pool.desc}</div>
+                          {pool.burst_capacity && (
+                            <div className="d-flex gap-2 flex-wrap small">
+                              <span className="badge bg-secondary-subtle text-body">
+                                Burst: {pool.burst_capacity} u
+                              </span>
+                              <span className="badge bg-secondary-subtle text-body">
+                                Refill: {pool.refill_rate_per_sec} u/s
+                              </span>
+                              <span className="badge bg-secondary-subtle text-body">
+                                Max Concurrency: {pool.max_concurrency}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* 16-Shard Grid */}
+                  <h6 className="fw-bold small text-uppercase text-muted mb-2">
+                    Live 16-Shard Partition Grid (Shard #00 — Shard #15)
+                  </h6>
+                  <div className="row g-2">
+                    {shardsList.map((sh) => (
+                      <div key={sh.shard_id} className="col-6 col-sm-4 col-md-3">
+                        <div className="p-3 rounded-4 border bg-body h-100">
+                          <div className="d-flex justify-content-between align-items-center mb-1">
+                            <span className="fw-bold font-monospace">
+                              SHARD #{String(sh.shard_id).padStart(2, '0')}
+                            </span>
+                            <span
+                              className={`badge rounded-pill ${
+                                sh.load_status === 'soft_pacing'
+                                  ? 'bg-warning text-dark'
+                                  : sh.load_status === 'optimal'
+                                  ? 'bg-success'
+                                  : 'bg-secondary'
+                              }`}
+                            >
+                              {sh.load_status}
+                            </span>
+                          </div>
+                          <div className="small text-muted">
+                            Pool: <strong className="text-uppercase">{sh.pool_tier}</strong>
+                          </div>
+                          <div className="small text-muted">
+                            Agents: <strong>{sh.active_agents}</strong> · Personas:{' '}
+                            <strong>{sh.active_personas}</strong>
+                          </div>
+                          <div className="small text-muted">
+                            Actions: <strong>{sh.actions_logged}</strong> · Paced:{' '}
+                            <strong>{sh.soft_paced_events}</strong> ({sh.avg_pacing_ms}ms)
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* VIEW 4: INTERACTIVE MCP TOOL CONSOLE */}
         {activeView === 'playground' && (
           <div className="row g-4">
             <div className="col-lg-6">
@@ -724,20 +1389,21 @@ function AgentsHubContent() {
 
                   <div className="mb-3">
                     <label className="form-label small fw-semibold">
-                      Select MCP Tool ({manifest?.tools?.length || 26} Available)
+                      Select MCP Tool ({manifest?.tools?.length || 34} Available)
                     </label>
                     <select
                       className="form-select font-monospace small"
                       value={selectedTool}
                       onChange={(e) => handleSelectTemplate(e.target.value)}
                     >
-                      {(manifest?.tools || Object.keys(SAMPLE_TOOL_TEMPLATES).map((name) => ({ name }))).map(
-                        (t: any) => (
-                          <option key={t.name} value={t.name}>
-                            {t.name} {t.scope ? `[scope: ${t.scope}]` : ''} — {t.category || ''}
-                          </option>
-                        )
-                      )}
+                      {(
+                        manifest?.tools ||
+                        Object.keys(SAMPLE_TOOL_TEMPLATES).map((name) => ({ name }))
+                      ).map((t: any) => (
+                        <option key={t.name} value={t.name}>
+                          {t.name} {t.scope ? `[scope: ${t.scope}]` : ''} — {t.category || ''}
+                        </option>
+                      ))}
                     </select>
                   </div>
 
@@ -781,9 +1447,9 @@ function AgentsHubContent() {
             <div className="col-lg-6">
               <div className="card rounded-4 border shadow-sm h-100">
                 <div className="card-body p-4 d-flex flex-column">
-                  <h5 className="fw-bold mb-2">Structured Response &amp; Telemetry</h5>
+                  <h5 className="fw-bold mb-2">Structured Response &amp; Soft Quota Governance</h5>
                   <p className="text-muted small mb-3">
-                    Every tool call is validated against token scopes and spend limits and recorded in <code>agent_audit_logs</code>.
+                    Every tool response includes <code>_quota_governance</code> with shard routing, burst token reserves, and adaptive pacing telemetry.
                   </p>
                   <pre
                     className="bg-dark text-light p-3 rounded-4 flex-fill small overflow-auto mb-0"
@@ -791,7 +1457,7 @@ function AgentsHubContent() {
                   >
                     {toolOutput
                       ? JSON.stringify(toolOutput, null, 2)
-                      : '// Click "Run" to execute the selected MCP tool and inspect its live JSON-RPC 2.0 / REST payload.'}
+                      : '// Click "Run" to execute the selected MCP tool and inspect its live JSON-RPC 2.0 / REST payload and _quota_governance telemetry.'}
                   </pre>
                 </div>
               </div>
@@ -799,15 +1465,17 @@ function AgentsHubContent() {
           </div>
         )}
 
-        {/* VIEW 3: AUDIT LOGS */}
+        {/* VIEW 5: AUDIT LOGS */}
         {activeView === 'audit' && (
           <div className="card rounded-4 border shadow-sm">
             <div className="card-body p-4">
               <div className="d-flex justify-content-between align-items-center mb-3">
                 <div>
-                  <h5 className="fw-bold mb-0">🛡️ Autonomous Agent Activity &amp; Spend Ledger</h5>
+                  <h5 className="fw-bold mb-0">
+                    🛡️ Autonomous Agent Activity, Shard Routing &amp; Spend Ledger
+                  </h5>
                   <p className="text-muted small mb-0">
-                    Immutable trace of every MCP tool invocation, resource mutation, and wallet spend executed on your account.
+                    Immutable trace of every MCP tool invocation, virtual shard assignment, soft pacing delay, and wallet spend.
                   </p>
                 </div>
                 <button
@@ -829,9 +1497,10 @@ function AgentsHubContent() {
                     <thead>
                       <tr>
                         <th>Timestamp</th>
-                        <th>Agent / Mode</th>
+                        <th>Agent</th>
+                        <th>Shard / Pool</th>
                         <th>Tool / Action</th>
-                        <th>Resource</th>
+                        <th>Quota / Pacing</th>
                         <th>Spend</th>
                         <th>Status</th>
                         <th>Details</th>
@@ -843,15 +1512,26 @@ function AgentsHubContent() {
                           <td className="text-nowrap text-muted">{log.created_at}</td>
                           <td>
                             <span className="badge bg-secondary-subtle text-body">
-                              {log.agent_name || (log.agent_token_id ? `Token #${log.agent_token_id}` : 'Session')}
+                              {log.agent_name ||
+                                (log.agent_token_id ? `Token #${log.agent_token_id}` : 'Session')}
+                            </span>
+                          </td>
+                          <td>
+                            <span className="badge bg-dark me-1">S#{log.shard_id ?? 0}</span>
+                            <span className="badge bg-info text-dark text-uppercase">
+                              {log.pool_tier || 'central'}
                             </span>
                           </td>
                           <td>
                             <code className="fw-bold">{log.tool_name}</code>
                           </td>
                           <td>
-                            {log.resource_type}
-                            {log.resource_id ? ` #${log.resource_id}` : ''}
+                            <span>{(log.action_units ?? 1.0).toFixed(1)} u</span>
+                            {log.throttle_mode && log.throttle_mode !== 'smooth' && (
+                              <span className="badge bg-warning text-dark ms-1">
+                                {log.throttle_mode} ({log.pacing_delay_ms || 0}ms)
+                              </span>
+                            )}
                           </td>
                           <td className={log.amount_spent > 0 ? 'fw-bold text-danger' : 'text-muted'}>
                             ${log.amount_spent.toFixed(2)}
@@ -865,7 +1545,7 @@ function AgentsHubContent() {
                               {log.status}
                             </span>
                           </td>
-                          <td className="text-truncate" style={{ maxWidth: '240px' }}>
+                          <td className="text-truncate" style={{ maxWidth: '220px' }}>
                             <code className="text-muted">{log.details}</code>
                           </td>
                         </tr>
@@ -878,15 +1558,15 @@ function AgentsHubContent() {
           </div>
         )}
 
-        {/* VIEW 4: CONNECT CLAUDE / CURSOR / CUSTOM AGENT */}
+        {/* VIEW 6: CONNECT CLAUDE / CURSOR / CUSTOM AGENT */}
         {activeView === 'connect' && (
           <div className="row g-4">
             <div className="col-lg-6">
               <div className="card rounded-4 border shadow-sm h-100">
                 <div className="card-body p-4">
-                  <h5 className="fw-bold mb-2">1. Zero-Human Autonomous Onboarding</h5>
+                  <h5 className="fw-bold mb-2">1. Zero-Human Autonomous Onboarding &amp; Persona Setup</h5>
                   <p className="text-muted small">
-                    An AI agent can create and operate its own creator or fan account from scratch with a single JSON-RPC call to <code>POST /api/mcp</code>:
+                    An AI agent can provision its own account, establish an autonomous persona residency on a shard, and compile deterministic execution briefs via <code>POST /api/mcp</code>:
                   </p>
                   <pre className="bg-dark text-light p-3 rounded-4 small overflow-auto">
 {`curl -X POST http://localhost:8080/api/mcp \\
@@ -896,15 +1576,13 @@ function AgentsHubContent() {
     "id": 1,
     "method": "tools/call",
     "params": {
-      "name": "account_register",
+      "name": "persona_upsert",
       "arguments": {
-        "name": "Aria Autonomous Studio",
-        "username": "aria_agent",
-        "email": "agent@heav3ns.com",
-        "password": "StrongAgentPassword123!",
-        "agent_name": "Primary Claude Operator",
-        "max_spend_per_tx": 25.0,
-        "daily_spend_limit": 100.0
+        "handle": "aria-studio-bot",
+        "display_name": "Aria Studio Bot",
+        "focus": "creator",
+        "pool_tier": "premium",
+        "autonomy_mode": "full_autonomous"
       }
     }
   }'`}
@@ -918,7 +1596,7 @@ function AgentsHubContent() {
                 <div className="card-body p-4">
                   <h5 className="fw-bold mb-2">2. MCP Client Configuration (Claude Desktop / Cursor)</h5>
                   <p className="text-muted small">
-                    Point any Model Context Protocol HTTP/JSON-RPC client or bridge at <code>/api/mcp</code> with your <code>hp_mcp_*</code> token:
+                    Point any Model Context Protocol HTTP/JSON-RPC client at <code>/api/mcp</code> with your sharded <code>hp_mcp_*</code> token:
                   </p>
                   <pre className="bg-dark text-light p-3 rounded-4 small overflow-auto">
 {`{
@@ -933,7 +1611,7 @@ function AgentsHubContent() {
 }`}
                   </pre>
                   <div className="small text-muted mt-2">
-                    Discovery manifest is always public at <code>GET /api/mcp/manifest</code>.
+                    Discovery manifest is public at <code>GET /api/mcp/manifest</code> and live shard telemetry at <code>GET /api/agent/shards</code>.
                   </div>
                 </div>
               </div>
@@ -950,7 +1628,9 @@ export default function AgentsHubPage() {
     <Suspense
       fallback={
         <AppShell>
-          <div className="p-4 text-center text-muted">Loading Autonomous Agent &amp; MCP Hub...</div>
+          <div className="p-4 text-center text-muted">
+            Loading Autonomous Agent Hub, Sharding &amp; Persona Studio...
+          </div>
         </AppShell>
       }
     >

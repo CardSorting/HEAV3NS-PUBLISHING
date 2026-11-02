@@ -118,6 +118,22 @@ pub struct AgentTokenView {
     pub daily_spend_limit: f64,
     pub spent_today: f64,
     pub spent_last_24h: f64,
+    #[serde(default)]
+    pub shard_id: i64,
+    #[serde(default)]
+    pub pool_tier: String,
+    #[serde(default)]
+    pub daily_action_quota: i64,
+    #[serde(default)]
+    pub daily_units_used: f64,
+    #[serde(default)]
+    pub available_burst_tokens: f64,
+    #[serde(default)]
+    pub burst_capacity: f64,
+    #[serde(default)]
+    pub refill_rate_per_sec: f64,
+    #[serde(default)]
+    pub throttle_mode: String,
     pub is_active: bool,
     pub last_used_at: Option<String>,
     pub expires_at: Option<String>,
@@ -135,6 +151,16 @@ pub struct AgentAuditLogView {
     pub resource_id: Option<String>,
     pub status: String,
     pub amount_spent: f64,
+    #[serde(default)]
+    pub action_units: f64,
+    #[serde(default)]
+    pub shard_id: i64,
+    #[serde(default)]
+    pub pool_tier: String,
+    #[serde(default)]
+    pub throttle_mode: String,
+    #[serde(default)]
+    pub pacing_delay_ms: i64,
     pub details: String,
     pub created_at: String,
 }

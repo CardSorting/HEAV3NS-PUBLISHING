@@ -61,9 +61,10 @@ Modern software engineering often conflates *distributed complexity* with *robus
 
 **HEAV3NS-Publishing** embraces **Radical Simplicity and Mechanical Sympathy**:
 
-- **Single-Binary Rust Backend (`backend/`)**: Compiled with **Axum 0.7**, **Tokio**, and **bundled SQLite (`rusqlite`)** in Write-Ahead Logging (`WAL`) mode. Cloning the repository and running `cargo run` initializes all 23 relational tables, enforces foreign-key constraints, and seeds realistic creator/fan demo data in milliseconds.
-- **Deterministic In-Memory Verification**: Because the entire persistence layer is embedded SQLite, the integration test suite (`cargo test`) spins up isolated `:memory:` databases and verifies 60+ HTTP endpoints, financial edge cases, and paywall invariants in **under 100 milliseconds**.
-- **Explicit Over Implicit**: Rather than hiding SQL queries behind complex macro-heavy ORMs or runtime reflection, [`backend/src/db.rs`](../../backend/src/db.rs) and [`backend/src/handlers.rs`](../../backend/src/handlers.rs) use explicit, auditable SQL paired with strongly typed Rust `serde` structs and `TransactionBehavior::Immediate` guards.
+- **Single-Binary Rust Backend (`backend/`)**: Compiled with **Axum 0.7**, **Tokio**, and **bundled SQLite (`rusqlite`)** in Write-Ahead Logging (`WAL`) mode (plus pooled PostgreSQL support). Cloning the repository and running `cargo run` initializes all 28 relational tables, enforces foreign-key constraints, and seeds realistic creator/fan demo data in milliseconds.
+- **Domain-Driven Design (DDD) Bounded-Context Modularity ([ADR-008](../adr/008-ddd-bounded-context-handlers-refactoring.md))**: All 75+ route handlers are organized into 9 clean bounded-context directories under [`backend/src/handlers/`](../../backend/src/handlers/) (`identity`, `content`, `discovery`, `social`, `messaging`, `monetization`, `media`, `governance`, `platform`) with explicit `handlers::<domain>::*` route bindings in [`backend/src/main.rs`](../../backend/src/main.rs).
+- **Deterministic In-Memory Verification**: Because the local persistence layer is embedded SQLite, the integration test suite (`cargo test`) spins up isolated `:memory:` databases and verifies 75+ HTTP endpoints, financial edge cases, sharding/soft quotas, MCP tools, and paywall invariants in **under 1 second**.
+- **Explicit Over Implicit**: Rather than hiding SQL queries behind complex macro-heavy ORMs or runtime reflection, [`backend/src/db.rs`](../../backend/src/db.rs) and [`backend/src/handlers/`](../../backend/src/handlers/) (re-exported via [`backend/src/handlers.rs`](../../backend/src/handlers.rs)) use explicit, auditable SQL paired with strongly typed Rust `serde` structs and `TransactionBehavior::Immediate` guards.
 
 ---
 
@@ -81,8 +82,8 @@ Creator tools should feel as fast and responsive as a professional creative work
 
 | Maxim | Architectural Manifestation |
 | :--- | :--- |
-| **"Never trust the client with money or entitlements."** | Server-authoritative pricing & `BEGIN IMMEDIATE` SQLite ledger transactions in [`handlers.rs`](../../backend/src/handlers.rs). |
-| **"If it is locked, it does not cross the wire."** | Server-side redaction of text, polls, comments, media URLs, and HLS links in [`db.rs`](../../backend/src/db.rs). |
-| **"Zero-config startup, sub-second verification."** | Embedded SQLite WAL + in-memory integration test suites (`8/8` suites in `<0.1s`). |
+| **"Never trust the client with money or entitlements."** | Server-authoritative pricing & `BEGIN IMMEDIATE` SQLite ledger transactions in [`handlers/monetization/ledger.rs`](../../backend/src/handlers/monetization/ledger.rs). |
+| **"If it is locked, it does not cross the wire."** | Server-side redaction of text, polls, comments, media URLs, and HLS links in [`db.rs`](../../backend/src/db.rs) & [`handlers/media/`](../../backend/src/handlers/media/). |
+| **"Zero-config startup, sub-second verification."** | Embedded SQLite WAL + in-memory integration test suites (`10+` suites in `<0.5s`). |
 | **"Documentation is executable institutional memory."** | Every bug class discovered during engineering audits is immortalized as a Post-Mortem (`docs/post-mortems/`) and a permanent regression test. |
 

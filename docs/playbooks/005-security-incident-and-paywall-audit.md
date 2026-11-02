@@ -21,21 +21,22 @@ JWT_SECRET="$NEW_SECRET" cargo run --release
 
 ## 2. Automated Paywall & Privacy Verification Suite
 
-If a regression is suspected in paywall masking or PII redaction, run the dedicated security and privacy integration tests in [`backend/src/main.rs`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/main.rs):
+If a regression is suspected in paywall masking or PII redaction across [`backend/src/db.rs`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/db.rs) or [`backend/src/handlers/`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/handlers/), run the dedicated security and privacy integration tests in [`backend/src/main.rs`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/main.rs):
 
 ```bash
 cd backend
-cargo test test_financial_security_and_withdrawals -- --nocapture
+cargo test test_security_and_regression_fixes -- --nocapture
 cargo test test_privacy_paywall_reels_and_moderation -- --nocapture
+cargo test test_deep_hardening_and_parity_features -- --nocapture
 ```
 
-What these two suites verify:
-1. **Subscription Price Spoofing Blocked**: Submitting `amount: 0.0` or `amount: -50.0` on a subscription payment is rejected (`400 Bad Request`) or overridden with the database-authoritative creator rate.
-2. **Duplicate PPV Unlocks Blocked**: Attempting to purchase `post-unlock`, `message-unlock`, or `stream-unlock` a second time returns `400 Bad Request` (`already unlocked`) without debiting the fan's wallet.
-3. **Locked Post Redaction**: Fetching a locked PPV post as an unsubscribed/unpaid viewer returns `is_unlocked: false`, `text: ""`, `poll: null`, and `attachments[].file_url == "/img/locked-media.svg"`.
-4. **Locked Profile Media Tab Redaction**: Fetching `/api/profile/:username` excludes attachments belonging to locked posts from `recent_media`.
-5. **VIP Stream HLS Redaction**: Fetching `/api/streams` as an unauthorized user masks VIP stream URLs to `"/img/locked-stream.m3u8"` with `is_unlocked: false`.
-6. **Public Profile PII Redaction**: Fetching `/api/profile/:username` for another user returns `email: null`, `birthdate: null`, and `wallet_balance: 0.0`.
+What these suites verify:
+1. **Subscription Price Spoofing Blocked ([`handlers/monetization/ledger.rs`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/handlers/monetization/ledger.rs))**: Submitting `amount: 0.0` or `amount: -50.0` on a subscription payment is overridden with the database-authoritative creator rate.
+2. **Duplicate PPV Unlocks Blocked ([`handlers/monetization/ledger.rs`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/handlers/monetization/ledger.rs))**: Attempting to purchase `post-unlock`, `reel-unlock`, `message-unlock`, or `stream-unlock` a second time returns `422 Unprocessable Entity` (`already unlocked`) without debiting the fan's wallet.
+3. **Locked Post Redaction ([`db.rs`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/db.rs))**: Fetching a locked PPV post as an unsubscribed/unpaid viewer returns `is_unlocked: false`, locked placeholder text, `poll: null`, `comments: []`, and `attachments[].file_url == "/img/post-locked.svg"`.
+4. **Locked Profile Media Tab Redaction ([`handlers/discovery/profiles.rs`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/handlers/discovery/profiles.rs))**: Fetching `/api/profile/:username` excludes attachments belonging to locked posts from `recent_media`.
+5. **VIP Stream HLS & PPV Reel Redaction ([`handlers/media/streams.rs`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/handlers/media/streams.rs) & [`handlers/media/reels.rs`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/handlers/media/reels.rs))**: Fetching `/api/streams` or `/api/reels` as an unauthorized user masks VIP stream HLS links and PPV reel video URLs with `is_unlocked: false`.
+6. **Public Profile PII Redaction ([`db.rs`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/db.rs))**: Fetching `/api/profile/:username` for another user returns `email: null`, `birthdate: null`, and `wallet_balance: 0.0`.
 
 ---
 
@@ -45,24 +46,25 @@ Run these commands against a running instance (`http://127.0.0.1:8080`) to verif
 
 ```bash
 # 1. Verify anonymous request to public profile redacts email & wallet_balance
-curl -s http://127.0.0.1:8080/api/profile/alex_creates | jq '{username: .user.username, email: .user.email, wallet: .user.wallet_balance}'
+curl -s http://127.0.0.1:8080/api/profile/ariavance | jq '{username: .profile.username, email: .profile.email, wallet: .profile.wallet_balance}'
 
 # Expected:
 # {
-#   "username": "alex_creates",
+#   "username": "ariavance",
 #   "email": null,
 #   "wallet": 0.0
 # }
 
-# 2. Verify anonymous request to a PPV post (Post #2, $15.00) redacts text and attachment URLs
+# 2. Verify anonymous request to a PPV post (Post #2, $19.99) redacts text and attachment URLs
 curl -s http://127.0.0.1:8080/api/posts/2 | jq '{id: .post.id, is_unlocked: .post.is_unlocked, text: .post.text, files: [.post.attachments[].file_url]}'
 
 # Expected:
 # {
 #   "id": 2,
 #   "is_unlocked": false,
-#   "text": "",
-#   "files": ["/img/locked-media.svg"]
+#   "text": "🔒 Exclusive locked content — Subscribe or unlock to view this post.",
+#   "files": ["/img/post-locked.svg"]
 # }
 ```
+
 

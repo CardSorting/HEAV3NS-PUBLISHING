@@ -1,18 +1,18 @@
 # Stakeholder Handoff & Executive Dossier
 
 - **Document ID**: `PAPER-002`
-- **Title**: *HEAV3NS-Publishing v2.0 — Executive Handoff, Unit Economics, Operational Readiness & Governance Dossier*
+- **Title**: *HEAV3NS-Publishing v2.5 — Executive Handoff, Unit Economics, Operational Readiness & Governance Dossier*
 - **Prepared For**: Executive Stakeholders, Product Owners, Operations Leads & Compliance Officers
-- **Version**: `2.0.0` (November 2026)
-- **System Status**: **Production-Ready (`v2.0.0` Verified)**
+- **Version**: `2.5.0` (November 2026)
+- **System Status**: **Production-Ready (`v2.5.0` Verified)**
 
 ---
 
 ## 1. Executive Summary
 
-**HEAV3NS-Publishing** is a turnkey, full-stack creator monetization platform combining a high-assurance **Rust (Axum 0.7 + SQLite WAL)** backend with a modern **Next.js 16.4.3 (React 19 + TypeScript)** web application.
+**HEAV3NS-Publishing** is a turnkey, full-stack creator monetization & autonomous persona platform combining a high-assurance **Rust (Axum 0.7 + 9 DDD Bounded Contexts + PostgreSQL & SQLite WAL)** backend with a modern **Next.js 16.4.3 (React 19 + TypeScript)** web application.
 
-As of **v2.0.0**, all core monetization flows, content formats, trust & safety workflows, and administrative controls are complete, regression-tested, and documented with operational runbooks. This handoff dossier provides leadership and operations teams with a clear map of business capabilities, unit economics, risk mitigations, and day-two operational procedures.
+As of **v2.5.0**, all core monetization flows, content formats, autonomous agent governance, trust & safety workflows, and administrative controls are complete, regression-tested, and documented with operational runbooks. This handoff dossier provides leadership and operations teams with a clear map of business capabilities, unit economics, risk mitigations, and day-two operational procedures.
 
 ---
 
@@ -39,7 +39,7 @@ The platform supports **six distinct monetization streams** and **five core publ
 
 ## 3. Financial Governance & Escrow Controls
 
-To protect platform solvency and prevent financial discrepancies, the payment and payout engine enforces four automated controls:
+To protect platform solvency and prevent financial discrepancies, the payment and payout engine (`handlers::monetization::ledger` & `handlers::platform::admin`) enforces four automated controls:
 
 ```mermaid
 sequenceDiagram
@@ -49,21 +49,21 @@ sequenceDiagram
     participant DB as SQLite WAL (Immediate Tx)
     actor Admin as Platform Admin
 
-    Creator->>API: POST /api/wallet/withdraw ($50.00, min $20.00)
+    Creator->>API: POST /api/withdrawals/request ($50.00, min $20.00)
     API->>DB: BEGIN IMMEDIATE\nVerify wallets.total >= $50.00\nDeduct $50.00 from wallets.total (Escrow)\nInsert withdrawals (status = 'requested')\nCOMMIT
     API-->>Creator: 200 OK (Balance Escrowed)
 
     alt Admin Approves Payout (After Bank/Stripe Disbursement)
-        Admin->>API: POST /api/admin/withdrawals/:id { status: "approved" }
-        API->>DB: Update withdrawals SET status = 'approved', processed = 1
+        Admin->>API: POST /api/admin/withdrawals/:id { action: "approve" }
+        API->>DB: Update withdrawals SET status = 'approved'
     else Admin Rejects Payout
-        Admin->>API: POST /api/admin/withdrawals/:id { status: "rejected" }
+        Admin->>API: POST /api/admin/withdrawals/:id { action: "reject" }
         API->>DB: BEGIN IMMEDIATE\nUpdate withdrawals SET status = 'rejected'\nRefund +$50.00 to wallets.total\nCOMMIT
     end
 ```
 
-1. **Immediate Withdrawal Escrow**: When a creator requests a payout (`POST /api/wallet/withdraw`, minimum `$20.00`), the funds are deducted from their spendable wallet balance immediately so they cannot double-withdraw while the request is pending review.
-2. **Automatic Rejection Refund**: If an administrator rejects a withdrawal request in `/admin`, the exact escrowed amount is atomically refunded to the creator's wallet.
+1. **Immediate Withdrawal Escrow**: When a creator requests a payout (`POST /api/withdrawals/request` in `handlers::monetization::request_withdrawal`, minimum `$20.00`), the funds are deducted from their spendable wallet balance immediately so they cannot double-withdraw while the request is pending review.
+2. **Automatic Rejection Refund**: If an administrator rejects a withdrawal request in `/admin` (`POST /api/admin/withdrawals/:id` with `{"action": "reject"}` in `handlers::platform::handle_admin_withdrawal`), the exact escrowed amount is atomically refunded to the creator's wallet.
 3. **Duplicate Purchase Protection**: The backend blocks fans from being charged twice for any already-unlocked PPV post, reel, message, or live stream.
 4. **Printable Tax Invoices**: Every approved transaction generates a structured invoice view at `/invoices/[id]` for subscriber and creator tax compliance.
 
@@ -98,8 +98,8 @@ All day-to-day operational procedures are documented in step-by-step runbooks un
 
 ---
 
-## 6. Known Scaling Horizon & Strategic Roadmap
+## 6. Known Scaling Horizon & Architectural Modularity
 
-- **Current Single-Node Capacity**: The embedded SQLite WAL engine with `BEGIN IMMEDIATE` transactions handles thousands of concurrent reads per second and数百 sequential financial writes per second on a single NVMe instance with zero external infrastructure cost.
-- **Horizontal Multi-Node Scaling Trigger**: When platform transaction volume exceeds single-node vertical limits or requires active-active multi-region write replicas, the database layer in [`backend/src/db.rs`](../../backend/src/db.rs) can be migrated to PostgreSQL (`sqlx::PgPool`) and local `backend/uploads/` can be backed by S3/Cloudflare R2 behind a CDN.
+- **Dual-Engine Persistence (PostgreSQL Cluster + SQLite WAL)**: The platform includes both an embedded SQLite WAL engine (`backend/src/db.rs`) for zero-configuration local/test speed and a full 28-table **PostgreSQL** schema (`backend/migrations/001_heav3ns_publishing_postgres.sql`) with connection pooling, **16 virtual shards (`0..15`)**, and **3 isolated relay pools** (`central`, `premium`, `studio`) documented in [ADR-007](../adr/007-postgres-sharding-and-soft-agent-quotas.md).
+- **Domain-Driven Design (DDD) Bounded Contexts ([ADR-008](../adr/008-ddd-bounded-context-handlers-refactoring.md))**: All 75+ backend handlers are modularized into 9 bounded-context directories (`content`, `discovery`, `governance`, `identity`, `media`, `messaging`, `monetization`, `platform`, `social`) under [`backend/src/handlers/`](../../backend/src/handlers/), allowing engineering and security teams to evolve and audit each business domain independently.
 

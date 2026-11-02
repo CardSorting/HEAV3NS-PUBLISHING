@@ -497,6 +497,100 @@ pub fn get_mcp_tools_catalog() -> Vec<Value> {
             "description": "Fetch comprehensive creator revenue breakdown (85/15 net split, subscriptions, PPV, tips), engagement metrics, notifications, and autonomous agent audit logs.",
             "inputSchema": { "type": "object", "properties": {} }
         }),
+        // 9. Autonomous Persona Studio, Sharding & Soft Quota Governance (No-Inference)
+        json!({
+            "name": "shard_pool_telemetry",
+            "category": "Shards & Quotas",
+            "scope": "read",
+            "description": "Inspect the 16 virtual shards, relay pool tiers (central, premium, studio), PostgreSQL cluster status, and soft token-bucket pacing metrics.",
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
+        json!({
+            "name": "persona_upsert",
+            "category": "Autonomous Personas",
+            "scope": "write",
+            "description": "Create or update an autonomous creator/fan persona residency assigned to a deterministic shard and relay pool tier.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["handle", "display_name"],
+                "properties": {
+                    "handle": { "type": "string", "description": "Unique persona handle (e.g. 'aria-neon-architect')" },
+                    "display_name": { "type": "string", "description": "Display name" },
+                    "description": { "type": "string", "description": "Persona identity bio" },
+                    "focus": { "type": "string", "description": "creator, curator, community, doujin, or gravure" },
+                    "pool_tier": { "type": "string", "description": "central, premium, or studio" },
+                    "autonomy_mode": { "type": "string", "description": "full_autonomous or autonomous_co_pilot" },
+                    "engagement_cadence": { "type": "string", "description": "high_touch, balanced, or curated" },
+                    "principles": { "type": "array", "items": { "type": "string" } },
+                    "interests": { "type": "array", "items": { "type": "string" } },
+                    "methods": { "type": "array", "items": { "type": "string" } },
+                    "direction": { "type": "string" }
+                }
+            }
+        }),
+        json!({
+            "name": "persona_get",
+            "category": "Autonomous Personas",
+            "scope": "read",
+            "description": "Fetch an autonomous persona by ID or handle (or list all personas for the account if omitted), including numbered practice revisions and recorded activities.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "persona_id": { "type": "string", "description": "Optional persona ID or handle" }
+                }
+            }
+        }),
+        json!({
+            "name": "persona_update_practice",
+            "category": "Autonomous Personas",
+            "scope": "write",
+            "description": "Append a new numbered practice revision to an autonomous persona with optimistic concurrency checking (expected_revision).",
+            "inputSchema": {
+                "type": "object",
+                "required": ["persona_id", "direction"],
+                "properties": {
+                    "persona_id": { "type": "string", "description": "Persona ID or handle" },
+                    "expected_revision": { "type": "integer", "description": "Optional current revision for optimistic concurrency check" },
+                    "focus": { "type": "string" },
+                    "principles": { "type": "array", "items": { "type": "string" } },
+                    "interests": { "type": "array", "items": { "type": "string" } },
+                    "methods": { "type": "array", "items": { "type": "string" } },
+                    "direction": { "type": "string", "description": "Updated creative & engagement direction" }
+                }
+            }
+        }),
+        json!({
+            "name": "persona_brief",
+            "category": "Autonomous Personas",
+            "scope": "read",
+            "description": "Deterministically compile a no-inference autonomous execution brief from the persona's latest practice revision and recent activity continuity.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["persona_id", "intent"],
+                "properties": {
+                    "persona_id": { "type": "string", "description": "Persona ID or handle" },
+                    "intent": { "type": "string", "description": "Session goal or content drop objective" },
+                    "target_audience": { "type": "string", "description": "Optional audience segment" }
+                }
+            }
+        }),
+        json!({
+            "name": "persona_record_activity",
+            "category": "Autonomous Personas",
+            "scope": "engage",
+            "description": "Append an immutable activity record to an autonomous persona's continuity ledger.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["persona_id", "action_type", "description"],
+                "properties": {
+                    "persona_id": { "type": "string", "description": "Persona ID or handle" },
+                    "action_type": { "type": "string", "description": "e.g. post_create, comment_reply, broadcast_drop" },
+                    "target_resource_id": { "type": "string" },
+                    "description": { "type": "string" },
+                    "practice_revision": { "type": "integer" }
+                }
+            }
+        }),
     ]
 }
 
@@ -517,7 +611,19 @@ pub fn get_mcp_resources_catalog() -> Vec<Value> {
         json!({
             "uri": "heav3ns://account/audit-logs",
             "name": "Autonomous Agent Audit Trail",
-            "description": "Immutable log of all MCP tool calls, resource mutations, and wallet spend executed by agents.",
+            "description": "Immutable log of all MCP tool calls, shard routing, soft quota pacing, and wallet spend executed by agents.",
+            "mimeType": "application/json"
+        }),
+        json!({
+            "uri": "heav3ns://account/personas",
+            "name": "Autonomous Personas & Practice Revisions",
+            "description": "Registered autonomous personas, numbered practice revisions, and continuity logs.",
+            "mimeType": "application/json"
+        }),
+        json!({
+            "uri": "heav3ns://platform/shards",
+            "name": "16-Shard & Relay Pool Telemetry",
+            "description": "Cluster-wide virtual shard load, central/premium/studio pool policies, and PostgreSQL status.",
             "mimeType": "application/json"
         }),
         json!({
@@ -564,24 +670,28 @@ pub async fn get_mcp_manifest() -> impl IntoResponse {
         "protocolVersion": "2024-11-05",
         "serverInfo": {
             "name": "heav3ns-publishing-mcp-server",
-            "version": "2.1.0",
+            "version": "2.4.0",
             "vendor": "HEAV3NS-Publishing",
-            "description": "Model Context Protocol (MCP) Server for autonomous AI agents to create, monetize, and operate creator & fan accounts end-to-end."
+            "description": "Model Context Protocol (MCP) Server for autonomous AI agents to create personas, operate creator & fan accounts, and self-regulate via 16-shard token-bucket soft quotas without server-side LLM inference."
         },
         "endpoints": {
             "jsonrpc": "/api/mcp",
             "manifest": "/api/mcp/manifest",
             "rest_tool_call": "/api/mcp/tools/:tool_name",
             "agent_tokens": "/api/agent/tokens",
+            "agent_shards": "/api/agent/shards",
+            "agent_personas": "/api/agent/personas",
             "creator_analytics": "/api/analytics/overview"
         },
         "authentication": {
             "headers": [
                 "Authorization: Bearer <hp_mcp_token_or_jwt>",
-                "X-Agent-Token: <hp_mcp_token>"
+                "X-Agent-Token: <hp_mcp_token>",
+                "X-Idempotency-Key: <optional_uuid>"
             ],
             "self_provisioning_tools": ["account_register", "account_login"],
-            "scopes": ["read", "write", "engage", "monetize", "messages", "wallet", "admin"]
+            "scopes": ["read", "write", "engage", "monetize", "messages", "wallet", "admin"],
+            "pool_tiers": ["central", "premium", "studio"]
         },
         "tools": get_mcp_tools_catalog(),
         "resources": get_mcp_resources_catalog(),
@@ -593,26 +703,84 @@ pub async fn get_mcp_manifest() -> impl IntoResponse {
 pub async fn call_mcp_tool_rest(
     State(state): State<AppState>,
     OptionalAuthUser(auth): OptionalAuthUser,
+    headers: axum::http::HeaderMap,
     Path(tool_name): Path<String>,
     Json(args): Json<Option<Value>>,
 ) -> Result<impl IntoResponse, AppError> {
-    let arguments = args.unwrap_or_else(|| json!({}));
+    let mut arguments = args.unwrap_or_else(|| json!({}));
+    if let Some(hdr_idem) = headers
+        .get("x-idempotency-key")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        if let Some(obj) = arguments.as_object_mut() {
+            obj.entry("idempotency_key".to_string())
+                .or_insert_with(|| Value::String(hdr_idem.to_string()));
+        }
+    }
     let result = execute_mcp_tool(&state, auth.as_ref(), &tool_name, &arguments)?;
-    Ok(Json(json!({
-        "success": true,
-        "tool": tool_name,
-        "result": result
-    })))
+    let shard_hdr = result
+        .get("_quota_governance")
+        .and_then(|q| q.get("shard_id"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0)
+        .to_string();
+    let pool_hdr = result
+        .get("_quota_governance")
+        .and_then(|q| q.get("pool_tier"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("central")
+        .to_string();
+    let mode_hdr = result
+        .get("_quota_governance")
+        .and_then(|q| q.get("throttle_mode"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("smooth")
+        .to_string();
+    let pacing_ms_val = result
+        .get("_quota_governance")
+        .and_then(|q| q.get("pacing_delay_ms"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let pacing_hdr = pacing_ms_val.to_string();
+
+    if mode_hdr == "soft_paced" && pacing_ms_val > 0 {
+        tokio::time::sleep(std::time::Duration::from_millis(
+            (pacing_ms_val as u64).min(250),
+        ))
+        .await;
+    }
+
+    Ok((
+        [
+            ("x-heav3ns-shard", shard_hdr),
+            ("x-heav3ns-pool", pool_hdr),
+            ("x-ratelimit-throttle-mode", mode_hdr),
+            ("x-ratelimit-pacing-ms", pacing_hdr),
+        ],
+        Json(json!({
+            "success": true,
+            "tool": tool_name,
+            "result": result
+        })),
+    ))
 }
 
 /// POST /api/mcp — Standard JSON-RPC 2.0 Model Context Protocol endpoint
 pub async fn handle_mcp_rpc(
     State(state): State<AppState>,
     OptionalAuthUser(auth): OptionalAuthUser,
+    headers: axum::http::HeaderMap,
     Json(req): Json<JsonRpcRequest>,
 ) -> impl IntoResponse {
     let rpc_id = req.id.clone().unwrap_or(Value::Null);
     let params = req.params.unwrap_or_else(|| json!({}));
+    let header_idem = headers
+        .get("x-idempotency-key")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
 
     let outcome: Result<Value, AppError> = match req.method.as_str() {
         "initialize" => Ok(json!({
@@ -624,7 +792,7 @@ pub async fn handle_mcp_rpc(
             },
             "serverInfo": {
                 "name": "heav3ns-publishing-mcp-server",
-                "version": "2.1.0"
+                "version": "2.4.0"
             }
         })),
         "notifications/initialized" | "ping" => Ok(json!({ "status": "ok" })),
@@ -665,26 +833,52 @@ pub async fn handle_mcp_rpc(
                 .get("name")
                 .and_then(|v| v.as_str())
                 .unwrap_or_default();
-            let arguments = params
+            let mut arguments = params
                 .get("arguments")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
+            if let Some(ref hid) = header_idem {
+                if let Some(obj) = arguments.as_object_mut() {
+                    obj.entry("idempotency_key".to_string())
+                        .or_insert_with(|| Value::String(hid.clone()));
+                }
+            }
             match execute_mcp_tool(&state, auth.as_ref(), tool_name, &arguments) {
-                Ok(val) => Ok(json!({
-                    "content": [{
-                        "type": "text",
-                        "text": serde_json::to_string_pretty(&val).unwrap_or_default()
-                    }],
-                    "structuredContent": val,
-                    "isError": false
-                })),
+                Ok(val) => {
+                    let mode_hdr = val
+                        .get("_quota_governance")
+                        .and_then(|q| q.get("throttle_mode"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("smooth");
+                    let pacing_ms_val = val
+                        .get("_quota_governance")
+                        .and_then(|q| q.get("pacing_delay_ms"))
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+                    if mode_hdr == "soft_paced" && pacing_ms_val > 0 {
+                        tokio::time::sleep(std::time::Duration::from_millis(
+                            (pacing_ms_val as u64).min(250),
+                        ))
+                        .await;
+                    }
+                    Ok(json!({
+                        "content": [{
+                            "type": "text",
+                            "text": serde_json::to_string_pretty(&val).unwrap_or_default()
+                        }],
+                        "structuredContent": val,
+                        "isError": false
+                    }))
+                }
                 Err(err) => {
                     let msg = match &err {
                         AppError::BadRequest(m)
                         | AppError::Unauthorized(m)
                         | AppError::Forbidden(m)
                         | AppError::NotFound(m)
+                        | AppError::Conflict(m)
                         | AppError::Unprocessable(m)
+                        | AppError::QuotaCooldownAdvisory(m, _)
                         | AppError::Internal(m) => m.clone(),
                     };
                     Ok(json!({
@@ -720,7 +914,9 @@ pub async fn handle_mcp_rpc(
                 AppError::Unauthorized(m) => (-32001, m),
                 AppError::Forbidden(m) => (-32003, m),
                 AppError::NotFound(m) => (-32004, m),
+                AppError::Conflict(m) => (-32009, m),
                 AppError::Unprocessable(m) => (-32602, m),
+                AppError::QuotaCooldownAdvisory(m, _) => (-32029, m),
                 AppError::BadRequest(m) => (-32601, m),
                 AppError::Internal(m) => (-32603, m),
             };
@@ -773,6 +969,16 @@ fn read_mcp_resource(
             let logs = list_user_agent_audit_logs(&conn, user.user_id, 50)?;
             Ok(json!({ "audit_logs": logs }))
         }
+        "heav3ns://account/personas" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            user.require_scope("read")?;
+            let personas = crate::handlers::list_user_agent_personas(&conn, Some(user.user_id))?;
+            Ok(json!({ "personas": personas }))
+        }
+        "heav3ns://platform/shards" => {
+            let telemetry = crate::sharding::build_shard_pool_telemetry(state, &conn);
+            Ok(json!({ "shard_telemetry": telemetry }))
+        }
         "heav3ns://account/analytics" => {
             let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
             user.require_scope("read")?;
@@ -798,15 +1004,15 @@ fn build_mcp_prompt(name: &str, args: &Value) -> Value {
         "autonomous_creator_onboarding" => format!(
             "You are operating an autonomous creator account for {persona} in the {niche} niche on HEAV3NS-Publishing.\n\
              Step 1: Call `account_register` (or `account_whoami` if already authenticated) to provision your account and `hp_mcp_*` agent token.\n\
-             Step 2: Call `profile_update` to set a compelling creator bio, location, website, and avatar.\n\
-             Step 3: Call `rates_and_offers_update` to configure 1/3/6/12-month subscription bundles and an introductory promotional discount.\n\
+             Step 2: Call `persona_upsert` to establish your autonomous persona residency on a dedicated virtual shard & relay pool.\n\
+             Step 3: Call `profile_update` and `rates_and_offers_update` to configure subscription bundles.\n\
              Step 4: Call `post_create_or_update` to publish a pinned welcome post with an interactive fan poll."
         ),
         "autonomous_daily_growth_and_engagement" => {
             "Execute the daily autonomous creator growth loop:\n\
-             1. Call `analytics_and_notifications` to inspect revenue (85/15 split), new subscribers, and unread comments.\n\
-             2. Call `ai_caption_suggest` and `post_create_or_update` (or `reel_create`) to publish fresh content.\n\
-             3. Call `messenger_broadcast` to notify active subscribers of new exclusive drops."
+             1. Call `analytics_and_notifications` and `shard_pool_telemetry` to inspect revenue (85/15 split), soft quota tokens, and unread comments.\n\
+             2. Call `persona_brief` to compile a deterministic execution brief from your latest practice revision.\n\
+             3. Call `post_create_or_update` (or `reel_create`) to publish fresh content and `persona_record_activity` to log continuity."
                 .to_string()
         }
         _ => format!(
@@ -838,9 +1044,18 @@ fn record_audit(
     amount_spent: f64,
     details: Value,
 ) {
+    let shard_id = auth
+        .shard_id
+        .unwrap_or_else(|| crate::sharding::compute_user_shard(auth.user_id, &auth.username));
+    let pool_tier = auth
+        .pool_tier
+        .clone()
+        .unwrap_or_else(|| "central".to_string());
+    let units = crate::sharding::action_unit_cost(tool_name);
     let _ = conn.execute(
-        "INSERT INTO agent_audit_logs (user_id, agent_token_id, tool_name, resource_type, resource_id, status, amount_spent, details)
-         VALUES (?1, ?2, ?3, ?4, ?5, 'success', ?6, ?7)",
+        "INSERT INTO agent_audit_logs
+         (user_id, agent_token_id, tool_name, resource_type, resource_id, status, amount_spent, action_units, shard_id, pool_tier, throttle_mode, pacing_delay_ms, details)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'success', ?6, ?7, ?8, ?9, 'smooth', 0, ?10)",
         params![
             auth.user_id,
             auth.agent_token_id,
@@ -848,6 +1063,9 @@ fn record_audit(
             resource_type,
             resource_id,
             round_money(amount_spent),
+            units,
+            shard_id,
+            pool_tier,
             details.to_string()
         ],
     );
@@ -865,16 +1083,151 @@ fn provision_agent_token_internal(
     let prefix = format!("{}...", &raw_secret[..14.min(raw_secret.len())]);
     let token_hash = hash_agent_token(&raw_secret);
     let scopes_json = serde_json::to_string(scopes).unwrap_or_else(|_| "[]".into());
+    let shard_id = crate::sharding::compute_user_shard(user_id, &prefix);
+    let policy = crate::sharding::get_pool_tier_policy("central");
 
     conn.execute(
-        "INSERT INTO agent_tokens (user_id, name, token_prefix, token_hash, scopes, max_spend_per_tx, daily_spend_limit, is_active)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1)",
-        params![user_id, agent_name, prefix, token_hash, scopes_json, max_tx, daily_lim],
+        "INSERT INTO agent_tokens
+         (user_id, name, token_prefix, token_hash, scopes, max_spend_per_tx, daily_spend_limit,
+          pool_tier, shard_id, daily_action_quota, hourly_burst_capacity, refill_rate_per_sec, is_active)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1)",
+        params![
+            user_id,
+            agent_name,
+            prefix,
+            token_hash,
+            scopes_json,
+            max_tx,
+            daily_lim,
+            policy.tier,
+            shard_id,
+            policy.daily_action_quota,
+            policy.burst_capacity,
+            policy.refill_rate_per_sec
+        ],
     )?;
-    Ok((conn.last_insert_rowid(), raw_secret))
+    let tid = conn.last_insert_rowid();
+    let today_str = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let _ = conn.execute(
+        "INSERT OR REPLACE INTO agent_quota_buckets
+         (agent_token_id, user_id, shard_id, pool_tier, available_tokens, burst_capacity, refill_rate_per_sec, daily_quota_limit, daily_units_used, daily_window_date, last_refill_epoch_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7, 0.0, ?8, ?9)",
+        params![
+            tid,
+            user_id,
+            shard_id,
+            policy.tier,
+            policy.burst_capacity,
+            policy.refill_rate_per_sec,
+            policy.daily_action_quota,
+            today_str,
+            now_ms
+        ],
+    );
+    Ok((tid, raw_secret))
 }
 
 pub fn execute_mcp_tool(
+    state: &AppState,
+    auth: Option<&AuthUser>,
+    tool_name: &str,
+    args: &Value,
+) -> Result<Value, AppError> {
+    let idem_key = args
+        .get("idempotency_key")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    let decision = {
+        let conn = state.lock_db();
+        crate::sharding::evaluate_and_consume_quota(
+            &conn,
+            auth,
+            tool_name,
+            idem_key.as_deref(),
+        )?
+    };
+
+    if decision.idempotent_replay {
+        if let Some(mut cached) = decision.cached_response.clone() {
+            if let Some(obj) = cached.as_object_mut() {
+                let gov = serde_json::to_value(&decision).unwrap_or_else(|_| json!({}));
+                obj.insert("_quota_governance".to_string(), gov.clone());
+                obj.insert("_heav3ns_governance".to_string(), gov);
+            }
+            return Ok(cached);
+        }
+    }
+
+    if !decision.allowed {
+        return Ok(json!({
+            "success": false,
+            "throttled": true,
+            "status": "cooldown_advisory",
+            "message": format!(
+                "Soft quota cooldown advisory on shard #{} ({} pool): daily action budget ({}/{} units) reached. Please pace autonomous loop for {}ms or use read/introspection tools.",
+                decision.shard_id,
+                decision.pool_tier,
+                decision.daily_units_used,
+                decision.daily_quota_limit,
+                decision.retry_after_ms
+            ),
+            "_quota_governance": decision,
+            "_heav3ns_governance": decision
+        }));
+    }
+
+    let mut raw_res = match execute_mcp_tool_inner(state, auth, tool_name, args) {
+        Ok(res) => res,
+        Err(err) => {
+            let conn = state.lock_db();
+            crate::sharding::refund_quota_consumption(&conn, auth, &decision);
+            if let (Some(user), Some(ref key)) = (auth, &idem_key) {
+                crate::sharding::clear_in_flight_idempotency(&conn, user.user_id, key);
+            }
+            return Err(err);
+        }
+    };
+
+
+    if let Some(obj) = raw_res.as_object_mut() {
+        let gov = serde_json::to_value(&decision).unwrap_or_else(|_| json!({}));
+        obj.insert("_quota_governance".to_string(), gov.clone());
+        obj.insert("_heav3ns_governance".to_string(), gov);
+    }
+
+    if let (Some(user), Some(ref key)) = (auth, &idem_key) {
+        let conn = state.lock_db();
+        crate::sharding::save_idempotent_action(&conn, user.user_id, key, tool_name, &raw_res);
+    }
+
+    // Update latest audit log entry for this agent token with soft pacing & shard telemetry
+    if let Some(user) = auth {
+        if let Some(tid) = user.agent_token_id {
+            let conn = state.lock_db();
+            let _ = conn.execute(
+                "UPDATE agent_audit_logs
+                 SET shard_id = ?1, pool_tier = ?2, action_units = ?3, throttle_mode = ?4, pacing_delay_ms = ?5, idempotency_key = ?6
+                 WHERE id = (SELECT MAX(id) FROM agent_audit_logs WHERE agent_token_id = ?7)",
+                params![
+                    decision.shard_id,
+                    decision.pool_tier,
+                    decision.action_units,
+                    decision.throttle_mode,
+                    decision.pacing_delay_ms,
+                    idem_key,
+                    tid
+                ],
+            );
+        }
+    }
+
+    Ok(raw_res)
+}
+
+fn execute_mcp_tool_inner(
     state: &AppState,
     auth: Option<&AuthUser>,
     tool_name: &str,
@@ -1140,11 +1493,14 @@ pub fn execute_mcp_tool(
                 .unwrap_or(0);
             record_audit(&conn, user, "account_whoami", "user", Some(user.user_id.to_string()), 0.0, json!({}));
             Ok(json!({
+                "authenticated": true,
                 "user": profile,
                 "unread_notifications": unread_notifications,
                 "unread_messages": unread_messages,
                 "auth_mode": if user.agent_token_id.is_some() { "mcp_agent_token" } else { "jwt" },
                 "agent_token_id": user.agent_token_id,
+                "shard_id": user.shard_id,
+                "pool_tier": user.pool_tier,
                 "scopes": user.agent_scopes,
                 "max_spend_per_tx": user.max_spend_per_tx,
                 "daily_spend_limit": user.daily_spend_limit
@@ -2487,14 +2843,30 @@ pub fn execute_mcp_tool(
                     )?;
                     let mid = conn.last_insert_rowid();
                     for att in &attachments {
-                        let fname = att.get("filename").and_then(|v| v.as_str()).unwrap_or("");
-                        if !fname.is_empty() {
-                            let ftype = att.get("file_type").and_then(|v| v.as_str()).unwrap_or("image");
-                            let thumb = att.get("thumbnail").and_then(|v| v.as_str());
+                        let (fname, furl, ftype) = if let Some(url_str) = att.as_str() {
+                            ("broadcast-media", url_str, "image")
+                        } else {
+                            let f = att.get("filename").and_then(|v| v.as_str()).unwrap_or("");
+                            let u = att
+                                .get("file_url")
+                                .or_else(|| att.get("thumbnail"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or(f);
+                            let t = att.get("file_type").and_then(|v| v.as_str()).unwrap_or("image");
+                            (f, u, t)
+                        };
+                        if !fname.is_empty() && !furl.is_empty() {
                             let _ = conn.execute(
-                                "INSERT INTO attachments (id, user_id, message_id, filename, driver, file_type, thumbnail)
-                                 VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6)",
-                                params![format!("att-bcast-{mid}-{}", sent_ids.len()), user.user_id, mid, fname, ftype, thumb],
+                                "INSERT INTO attachments (id, user_id, message_id, filename, file_url, file_type, file_size)
+                                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1024)",
+                                params![
+                                    format!("att-bcast-{mid}-{}", sent_ids.len()),
+                                    user.user_id,
+                                    mid,
+                                    fname,
+                                    furl,
+                                    ftype
+                                ],
                             );
                         }
                     }
@@ -2814,6 +3186,360 @@ pub fn execute_mcp_tool(
                 "notifications": notifications,
                 "agent_audit_logs": audit_logs
             }))
+        }
+
+        "shard_pool_telemetry" => {
+            let conn = state.lock_db();
+            let telemetry = crate::sharding::build_shard_pool_telemetry(state, &conn);
+            if let Some(user) = auth {
+                record_audit(&conn, user, "shard_pool_telemetry", "shards", None, 0.0, json!({}));
+            }
+            Ok(json!({
+                "telemetry": telemetry
+            }))
+        }
+
+        "persona_get" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            user.require_scope("read")?;
+            let conn = state.lock_db();
+            if let Some(pid) = args
+                .get("persona_id")
+                .or_else(|| args.get("handle"))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.trim().is_empty())
+            {
+                let persona = crate::handlers::get_persona_by_id_or_handle(&conn, pid)?;
+                Ok(json!({ "persona": persona }))
+            } else {
+                let personas = crate::handlers::list_user_agent_personas(&conn, Some(user.user_id))?;
+                Ok(json!({ "personas": personas }))
+            }
+        }
+
+        "persona_upsert" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            user.require_scope("write")?;
+            let handle = args
+                .get("handle")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .trim_start_matches('@')
+                .to_lowercase()
+                .replace(' ', "-");
+            let display_name = args
+                .get("display_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            if handle.len() < 3 || display_name.is_empty() {
+                return Err(AppError::Unprocessable(
+                    "handle (min 3 chars) and display_name are required.".into(),
+                ));
+            }
+            let description = args
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let focus = args
+                .get("focus")
+                .and_then(|v| v.as_str())
+                .unwrap_or("creator")
+                .to_string();
+            let policy = crate::sharding::get_pool_tier_policy(
+                args.get("pool_tier")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("central"),
+            );
+            let autonomy_mode = args
+                .get("autonomy_mode")
+                .and_then(|v| v.as_str())
+                .unwrap_or("autonomous_co_pilot")
+                .to_string();
+            let engagement_cadence = args
+                .get("engagement_cadence")
+                .and_then(|v| v.as_str())
+                .unwrap_or("balanced")
+                .to_string();
+            let shard_id = crate::sharding::compute_virtual_shard(&format!("persona:{}:{handle}", user.user_id));
+
+            let conn = state.lock_db();
+            let existing = crate::handlers::get_persona_by_id_or_handle(&conn, &handle).ok();
+            let pid = if let Some(ex) = existing {
+                if ex.user_id != user.user_id && user.role_id != 1 {
+                    return Err(AppError::Forbidden("Persona handle owned by another user.".into()));
+                }
+                conn.execute(
+                    "UPDATE agent_personas
+                     SET display_name = ?1, description = ?2, focus = ?3, pool_tier = ?4,
+                         autonomy_mode = ?5, engagement_cadence = ?6, updated_at = datetime('now')
+                     WHERE id = ?7",
+                    params![
+                        display_name,
+                        description,
+                        focus,
+                        policy.tier,
+                        autonomy_mode,
+                        engagement_cadence,
+                        ex.id
+                    ],
+                )?;
+                ex.id
+            } else {
+                let new_id = format!("persona-{}", &Uuid::new_v4().simple().to_string()[..12]);
+                let principles: Vec<String> = args
+                    .get("principles")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                    .unwrap_or_else(|| vec!["Maintain authentic creator voice.".into()]);
+                let interests: Vec<String> = args
+                    .get("interests")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                    .unwrap_or_else(|| vec!["Behind-the-scenes studio craft".into()]);
+                let methods: Vec<String> = args
+                    .get("methods")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                    .unwrap_or_else(|| vec!["Pair PPV drops with free community polls.".into()]);
+                let direction = args
+                    .get("direction")
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
+                    .unwrap_or_else(|| description.clone());
+
+                let rev = crate::sharding::PersonaPracticeRevision {
+                    revision: 1,
+                    focus: focus.clone(),
+                    principles,
+                    interests,
+                    methods,
+                    direction,
+                    recorded_at: chrono::Utc::now().to_rfc3339(),
+                };
+                let p_json = serde_json::to_string(&vec![rev]).unwrap_or_else(|_| "[]".into());
+                conn.execute(
+                    "INSERT INTO agent_personas
+                     (id, user_id, handle, display_name, description, focus, shard_id, pool_tier,
+                      autonomy_mode, engagement_cadence, current_revision, practices_json, activities_json)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1, ?11, '[]')",
+                    params![
+                        new_id,
+                        user.user_id,
+                        handle,
+                        display_name,
+                        description,
+                        focus,
+                        shard_id,
+                        policy.tier,
+                        autonomy_mode,
+                        engagement_cadence,
+                        p_json
+                    ],
+                )?;
+                new_id
+            };
+            let persona = crate::handlers::get_persona_by_id_or_handle(&conn, &pid)?;
+            record_audit(
+                &conn,
+                user,
+                "persona_upsert",
+                "persona",
+                Some(pid),
+                0.0,
+                json!({ "handle": persona.handle, "shard_id": persona.shard_id, "pool_tier": persona.pool_tier }),
+            );
+            drop(conn);
+            state.sync_persona_to_postgres(&persona);
+            Ok(json!({ "persona": persona }))
+        }
+
+        "persona_update_practice" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            user.require_scope("write")?;
+            let pid = args
+                .get("persona_id")
+                .or_else(|| args.get("handle"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| AppError::BadRequest("persona_id required".into()))?;
+            let direction = args
+                .get("direction")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            if direction.is_empty() {
+                return Err(AppError::Unprocessable("direction required".into()));
+            }
+            let conn = state.lock_db();
+            let mut persona = crate::handlers::get_persona_by_id_or_handle(&conn, pid)?;
+            if persona.user_id != user.user_id && user.role_id != 1 {
+                return Err(AppError::Forbidden("Forbidden".into()));
+            }
+            if let Some(exp) = args.get("expected_revision").and_then(|v| v.as_i64()) {
+                if exp != persona.current_revision {
+                    return Err(AppError::Conflict(format!(
+                        "Expected revision {exp}, found {}",
+                        persona.current_revision
+                    )));
+                }
+            }
+            let next_rev = persona.current_revision + 1;
+            let prev = persona.practices.last().cloned();
+            let focus = args
+                .get("focus")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+                .or_else(|| prev.as_ref().map(|p| p.focus.clone()))
+                .unwrap_or_else(|| persona.focus.clone());
+            let principles = args
+                .get("principles")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                .or_else(|| prev.as_ref().map(|p| p.principles.clone()))
+                .unwrap_or_default();
+            let interests = args
+                .get("interests")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                .or_else(|| prev.as_ref().map(|p| p.interests.clone()))
+                .unwrap_or_default();
+            let methods = args
+                .get("methods")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                .or_else(|| prev.as_ref().map(|p| p.methods.clone()))
+                .unwrap_or_default();
+
+            let rev_obj = crate::sharding::PersonaPracticeRevision {
+                revision: next_rev,
+                focus: focus.clone(),
+                principles,
+                interests,
+                methods,
+                direction: direction.to_string(),
+                recorded_at: chrono::Utc::now().to_rfc3339(),
+            };
+            persona.practices.push(rev_obj.clone());
+            let p_json = serde_json::to_string(&persona.practices).unwrap_or_else(|_| "[]".into());
+            conn.execute(
+                "UPDATE agent_personas SET focus = ?1, current_revision = ?2, practices_json = ?3, updated_at = datetime('now') WHERE id = ?4",
+                params![focus, next_rev, p_json, persona.id],
+            )?;
+            let updated = crate::handlers::get_persona_by_id_or_handle(&conn, &persona.id)?;
+            record_audit(
+                &conn,
+                user,
+                "persona_update_practice",
+                "persona",
+                Some(persona.id),
+                0.0,
+                json!({ "revision": next_rev }),
+            );
+            drop(conn);
+            state.sync_persona_to_postgres(&updated);
+            Ok(json!({ "practice": rev_obj, "persona": updated }))
+        }
+
+        "persona_brief" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            user.require_scope("read")?;
+            let pid = args
+                .get("persona_id")
+                .or_else(|| args.get("handle"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| AppError::BadRequest("persona_id required".into()))?;
+            let intent = args
+                .get("intent")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Engage with subscribers and publish high-craft studio updates")
+                .trim();
+            let audience = args.get("target_audience").and_then(|v| v.as_str());
+            let conn = state.lock_db();
+            let persona = crate::handlers::get_persona_by_id_or_handle(&conn, pid)?;
+            let brief = crate::sharding::compile_persona_brief(&persona, intent, audience);
+            record_audit(
+                &conn,
+                user,
+                "persona_brief",
+                "persona",
+                Some(persona.id),
+                0.0,
+                json!({ "intent": intent }),
+            );
+            Ok(json!({ "brief": brief }))
+        }
+
+        "persona_record_activity" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            user.require_scope("engage")?;
+            let pid = args
+                .get("persona_id")
+                .or_else(|| args.get("handle"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| AppError::BadRequest("persona_id required".into()))?;
+            let action_type = args
+                .get("action_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("engagement")
+                .trim();
+            let description = args
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            if description.is_empty() {
+                return Err(AppError::Unprocessable("description required".into()));
+            }
+            let conn = state.lock_db();
+            let mut persona = crate::handlers::get_persona_by_id_or_handle(&conn, pid)?;
+            if persona.user_id != user.user_id && user.role_id != 1 {
+                return Err(AppError::Forbidden("Forbidden".into()));
+            }
+            let rev = args
+                .get("practice_revision")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(persona.current_revision);
+            if rev < 1 || rev > persona.current_revision {
+                return Err(AppError::Unprocessable(format!(
+                    "Invalid practice_revision {rev} (valid range: 1..={}).",
+                    persona.current_revision
+                )));
+            }
+            let now_iso = chrono::Utc::now().to_rfc3339();
+            let act = crate::sharding::PersonaActivityRecord {
+                id: format!("act-{}", &Uuid::new_v4().simple().to_string()[..12]),
+                persona_id: persona.id.clone(),
+                practice_revision: rev,
+                action_type: action_type.to_string(),
+                target_resource_id: args
+                    .get("target_resource_id")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                description: description.to_string(),
+                occurred_at: now_iso.clone(),
+                recorded_at: now_iso,
+            };
+            persona.activities.push(act.clone());
+            let a_json = serde_json::to_string(&persona.activities).unwrap_or_else(|_| "[]".into());
+            conn.execute(
+                "UPDATE agent_personas SET activities_json = ?1, updated_at = datetime('now') WHERE id = ?2",
+                params![a_json, persona.id],
+            )?;
+            let updated = crate::handlers::get_persona_by_id_or_handle(&conn, &persona.id)?;
+            record_audit(
+                &conn,
+                user,
+                "persona_record_activity",
+                "persona",
+                Some(persona.id),
+                0.0,
+                json!({ "activity_id": act.id, "action_type": action_type }),
+            );
+            drop(conn);
+            state.sync_persona_to_postgres(&updated);
+            Ok(json!({ "activity": act, "persona": updated }))
         }
 
         other => Err(AppError::NotFound(format!("Unknown MCP tool: {other}"))),

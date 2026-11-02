@@ -3,6 +3,7 @@ pub mod db;
 pub mod handlers;
 pub mod mcp;
 pub mod models;
+pub mod sharding;
 
 use axum::{
     extract::DefaultBodyLimit,
@@ -16,7 +17,7 @@ use tower_http::{
     services::ServeDir,
 };
 
-use crate::db::{init_db, AppState};
+use crate::db::{init_db, init_postgres_db, AppState};
 
 pub fn build_app(state: AppState) -> Router {
     let cors = CorsLayer::new()
@@ -34,115 +35,183 @@ pub fn build_app(state: AppState) -> Router {
             header::ACCEPT,
             header::COOKIE,
             header::HeaderName::from_static("x-agent-token"),
+            header::HeaderName::from_static("x-idempotency-key"),
+        ])
+        .expose_headers([
+            header::HeaderName::from_static("x-heav3ns-shard"),
+            header::HeaderName::from_static("x-heav3ns-pool"),
+            header::HeaderName::from_static("x-ratelimit-throttle-mode"),
+            header::HeaderName::from_static("x-ratelimit-pacing-ms"),
         ])
         .allow_credentials(true);
 
     let api_router = Router::new()
-        // Health & Home
-        .route("/health", get(handlers::health_check))
-        .route("/home", get(handlers::get_home_data))
-        // Auth
-        .route("/auth/register", post(handlers::register))
-        .route("/auth/login", post(handlers::login))
-        .route("/auth/logout", post(handlers::logout))
-        .route("/auth/me", get(handlers::get_me))
-        // Feed & Suggestions
-        .route("/feed", get(handlers::get_feed))
-        .route("/suggestions/filter", post(handlers::filter_suggestions))
-        // Posts
-        .route("/posts/save", post(handlers::save_post))
-        .route("/posts/react", post(handlers::toggle_reaction))
-        .route("/posts/bookmark", post(handlers::toggle_bookmark))
-        .route("/posts/pin", post(handlers::toggle_pin_post))
-        .route("/posts/comments", post(handlers::add_comment))
+        // Platform: Health & Home
+        .route("/health", get(handlers::platform::health_check))
+        .route("/home", get(handlers::platform::get_home_data))
+        // Identity: Auth
+        .route("/auth/register", post(handlers::identity::register))
+        .route("/auth/login", post(handlers::identity::login))
+        .route("/auth/logout", post(handlers::identity::logout))
+        .route("/auth/me", get(handlers::identity::get_me))
+        // Discovery: Feed, Suggestions, Profiles & Search
+        .route("/feed", get(handlers::discovery::get_feed))
+        .route("/suggestions/filter", post(handlers::discovery::filter_suggestions))
+        .route("/profile/:username", get(handlers::discovery::get_profile))
+        .route("/search", get(handlers::discovery::search_handler))
+        // Content: Posts, Reactions, Comments & Polls
+        .route("/posts/save", post(handlers::content::save_post))
+        .route("/posts/react", post(handlers::content::toggle_reaction))
+        .route("/posts/bookmark", post(handlers::content::toggle_bookmark))
+        .route("/posts/pin", post(handlers::content::toggle_pin_post))
+        .route("/posts/comments", post(handlers::content::add_comment))
         .route(
             "/posts/comments/:comment_id",
-            delete(handlers::delete_comment)
-                .put(handlers::edit_comment)
-                .post(handlers::edit_comment),
+            delete(handlers::content::delete_comment)
+                .put(handlers::content::edit_comment)
+                .post(handlers::content::edit_comment),
         )
-        .route("/posts/polls/vote", post(handlers::vote_poll))
-        .route("/posts/:post_id", get(handlers::get_single_post).delete(handlers::delete_post))
-        // Profiles & Search
-        .route("/profile/:username", get(handlers::get_profile))
-        .route("/search", get(handlers::search_handler))
-        // Bookmarks & Lists
-        .route("/bookmarks", get(handlers::get_bookmarks))
-        .route("/lists", get(handlers::get_lists).post(handlers::save_list))
-        .route("/lists/members", post(handlers::toggle_list_member))
-        .route("/lists/follow", post(handlers::toggle_follow))
-        .route("/lists/block", post(handlers::toggle_block_user))
+        .route("/posts/polls/vote", post(handlers::content::vote_poll))
+        .route(
+            "/posts/:post_id",
+            get(handlers::content::get_single_post).delete(handlers::content::delete_post),
+        )
+        // Social: Bookmarks, Lists, Graph & Notifications
+        .route("/bookmarks", get(handlers::social::get_bookmarks))
+        .route(
+            "/lists",
+            get(handlers::social::get_lists).post(handlers::social::save_list),
+        )
+        .route("/lists/members", post(handlers::social::toggle_list_member))
+        .route("/lists/follow", post(handlers::social::toggle_follow))
+        .route("/lists/block", post(handlers::social::toggle_block_user))
         .route(
             "/lists/:list_id",
-            get(handlers::get_list_detail)
-                .put(handlers::rename_list)
-                .delete(handlers::delete_list),
+            get(handlers::social::get_list_detail)
+                .put(handlers::social::rename_list)
+                .delete(handlers::social::delete_list),
         )
-        .route("/lists/:list_id/clear", post(handlers::clear_list))
-        // Messenger & Broadcasts
-        .route("/messenger/contacts", get(handlers::get_messenger_contacts))
-        .route("/messenger/messages/:user_id", get(handlers::get_messages_with_user))
-        .route("/messenger/send", post(handlers::send_message))
-        .route("/messenger/broadcast", post(handlers::broadcast_message))
-        .route("/messenger/pin/:message_id", post(handlers::toggle_pin_message))
-        .route("/messenger/message/:message_id", delete(handlers::delete_message))
-        // Notifications & Analytics
-        .route("/notifications", get(handlers::get_notifications))
-        .route("/analytics/overview", get(handlers::get_creator_analytics))
-        // Payments, Subscriptions, Invoices & Withdrawals
-        .route("/payments/initiate", post(handlers::initiate_payment))
-        .route("/invoices/:id", get(handlers::get_invoice_detail))
-        .route("/subscriptions/:sub_id/cancel", post(handlers::cancel_subscription))
-        .route("/withdrawals/request", post(handlers::request_withdrawal))
-        // Settings
-        .route("/settings", get(handlers::get_settings_data))
-        .route("/settings/profile", post(handlers::update_profile_settings))
-        .route("/settings/rates", post(handlers::update_rates_settings))
-        .route("/settings/account", post(handlers::update_account_settings))
-        .route("/settings/privacy", post(handlers::update_privacy_settings))
-        .route("/settings/verify", post(handlers::submit_verification_request))
-        // Agent Tokens & Model Context Protocol (MCP)
+        .route("/lists/:list_id/clear", post(handlers::social::clear_list))
+        .route("/notifications", get(handlers::social::get_notifications))
+        // Messaging: Direct Messenger & Broadcasts
+        .route("/messenger/contacts", get(handlers::messaging::get_messenger_contacts))
+        .route(
+            "/messenger/messages/:user_id",
+            get(handlers::messaging::get_messages_with_user),
+        )
+        .route("/messenger/send", post(handlers::messaging::send_message))
+        .route("/messenger/broadcast", post(handlers::messaging::broadcast_message))
+        .route("/messenger/pin/:message_id", post(handlers::messaging::toggle_pin_message))
+        .route("/messenger/message/:message_id", delete(handlers::messaging::delete_message))
+        // Monetization: Payments, Subscriptions, Invoices, Withdrawals & Analytics
+        .route("/analytics/overview", get(handlers::monetization::get_creator_analytics))
+        .route("/payments/initiate", post(handlers::monetization::initiate_payment))
+        .route("/invoices/:id", get(handlers::monetization::get_invoice_detail))
+        .route(
+            "/subscriptions/:sub_id/cancel",
+            post(handlers::monetization::cancel_subscription),
+        )
+        .route("/withdrawals/request", post(handlers::monetization::request_withdrawal))
+        // Identity: Settings & Verification
+        .route("/settings", get(handlers::identity::get_settings_data))
+        .route("/settings/profile", post(handlers::identity::update_profile_settings))
+        .route("/settings/rates", post(handlers::identity::update_rates_settings))
+        .route("/settings/account", post(handlers::identity::update_account_settings))
+        .route("/settings/privacy", post(handlers::identity::update_privacy_settings))
+        .route("/settings/verify", post(handlers::identity::submit_verification_request))
+        // Governance: Agent Tokens, Shards, Autonomous Personas & Model Context Protocol (MCP)
         .route(
             "/agent/tokens",
-            get(handlers::get_agent_tokens).post(handlers::create_agent_token),
+            get(handlers::governance::get_agent_tokens)
+                .post(handlers::governance::create_agent_token),
         )
-        .route("/agent/tokens/:token_id", delete(handlers::delete_agent_token))
-        .route("/agent/tokens/:token_id/revoke", post(handlers::revoke_agent_token))
+        .route(
+            "/agent/tokens/:token_id",
+            delete(handlers::governance::delete_agent_token),
+        )
+        .route(
+            "/agent/tokens/:token_id/revoke",
+            post(handlers::governance::revoke_agent_token),
+        )
+        .route("/agent/shards", get(handlers::governance::get_agent_shards_telemetry))
+        .route(
+            "/agent/personas",
+            get(handlers::governance::get_agent_personas)
+                .post(handlers::governance::upsert_agent_persona),
+        )
+        .route(
+            "/agent/personas/:persona_id/practice",
+            post(handlers::governance::update_persona_practice),
+        )
+        .route(
+            "/agent/personas/:persona_id/brief",
+            post(handlers::governance::compile_persona_brief_handler),
+        )
+        .route(
+            "/agent/personas/:persona_id/activities",
+            post(handlers::governance::record_persona_activity),
+        )
         .route("/mcp", post(mcp::handle_mcp_rpc).get(mcp::get_mcp_manifest))
         .route("/mcp/manifest", get(mcp::get_mcp_manifest))
         .route("/mcp/tools/:tool_name", post(mcp::call_mcp_tool_rest))
-        // Media Vault & Uploads
-        .route("/vault", get(handlers::get_vault_items))
-        .route("/vault/:att_id", delete(handlers::delete_vault_item))
-        .route("/vault/:att_id/archive", post(handlers::toggle_archive_vault_item))
-        .route("/attachment/upload", post(handlers::upload_attachment))
-        // Reels, Stories & Streams
-        .route("/reels", get(handlers::get_reels).post(handlers::create_reel))
-        .route("/reels/comments", post(handlers::add_reel_comment))
-        .route("/reels/comments/:comment_id", delete(handlers::delete_reel_comment))
-        .route("/reels/:reel_id", delete(handlers::delete_reel))
-        .route("/reels/:reel_id/view", post(handlers::increment_reel_view))
-        .route("/reels/:reel_id/comments", get(handlers::get_reel_comments))
-        .route("/stories", get(handlers::get_stories).post(handlers::create_story))
-        .route("/stories/:story_id", delete(handlers::delete_story))
-        .route("/stories/:story_id/view", post(handlers::increment_story_view))
-        .route("/stories/:story_id/pin", post(handlers::toggle_story_highlight))
-        .route("/streams", get(handlers::get_streams).post(handlers::save_stream))
-        .route("/streams/comment", post(handlers::add_stream_comment))
+        // Media: Vault, Uploads, Reels, Stories & Streams
+        .route("/vault", get(handlers::media::get_vault_items))
+        .route("/vault/:att_id", delete(handlers::media::delete_vault_item))
+        .route(
+            "/vault/:att_id/archive",
+            post(handlers::media::toggle_archive_vault_item),
+        )
+        .route("/attachment/upload", post(handlers::media::upload_attachment))
+        .route(
+            "/reels",
+            get(handlers::media::get_reels).post(handlers::media::create_reel),
+        )
+        .route("/reels/comments", post(handlers::media::add_reel_comment))
+        .route(
+            "/reels/comments/:comment_id",
+            delete(handlers::media::delete_reel_comment),
+        )
+        .route("/reels/:reel_id", delete(handlers::media::delete_reel))
+        .route("/reels/:reel_id/view", post(handlers::media::increment_reel_view))
+        .route("/reels/:reel_id/comments", get(handlers::media::get_reel_comments))
+        .route(
+            "/stories",
+            get(handlers::media::get_stories).post(handlers::media::create_story),
+        )
+        .route("/stories/:story_id", delete(handlers::media::delete_story))
+        .route("/stories/:story_id/view", post(handlers::media::increment_story_view))
+        .route(
+            "/stories/:story_id/pin",
+            post(handlers::media::toggle_story_highlight),
+        )
+        .route(
+            "/streams",
+            get(handlers::media::get_streams).post(handlers::media::save_stream),
+        )
+        .route("/streams/comment", post(handlers::media::add_stream_comment))
         .route(
             "/streams/:stream_id",
-            get(handlers::get_stream_detail).delete(handlers::delete_stream),
+            get(handlers::media::get_stream_detail).delete(handlers::media::delete_stream),
         )
-        .route("/streams/:stream_id/stop", post(handlers::stop_stream))
-        // Public Pages, Contact, Reports, AI & Admin
-        .route("/pages/:slug", get(handlers::get_public_page))
-        .route("/contact", post(handlers::send_contact_message))
-        .route("/report", post(handlers::submit_report))
-        .route("/ai/suggest", post(handlers::generate_ai_suggestion))
-        .route("/admin/dashboard", get(handlers::get_admin_dashboard))
-        .route("/admin/withdrawals/:withdrawal_id", post(handlers::handle_admin_withdrawal))
-        .route("/admin/reports/:report_id", post(handlers::handle_admin_report))
-        .route("/admin/verifications/:verify_id", post(handlers::handle_admin_verification));
+        .route("/streams/:stream_id/stop", post(handlers::media::stop_stream))
+        // Platform: Public Pages, Contact, Reports, AI & Admin
+        .route("/pages/:slug", get(handlers::platform::get_public_page))
+        .route("/contact", post(handlers::platform::send_contact_message))
+        .route("/report", post(handlers::platform::submit_report))
+        .route("/ai/suggest", post(handlers::platform::generate_ai_suggestion))
+        .route("/admin/dashboard", get(handlers::platform::get_admin_dashboard))
+        .route(
+            "/admin/withdrawals/:withdrawal_id",
+            post(handlers::platform::handle_admin_withdrawal),
+        )
+        .route(
+            "/admin/reports/:report_id",
+            post(handlers::platform::handle_admin_report),
+        )
+        .route(
+            "/admin/verifications/:verify_id",
+            post(handlers::platform::handle_admin_verification),
+        );
 
     Router::new()
         .nest("/api", api_router)
@@ -163,6 +232,15 @@ async fn main() {
         .init();
 
     let db_path = std::env::var("DATABASE_PATH").unwrap_or_else(|_| "justfans.sqlite".into());
+    let postgres_url = std::env::var("HEAV3NS_DATABASE_URL")
+        .or_else(|_| std::env::var("DATABASE_URL"))
+        .ok()
+        .filter(|s| s.starts_with("postgres://") || s.starts_with("postgresql://"));
+    let postgres_pool_size: usize = std::env::var("HEAV3NS_DATABASE_POOL_SIZE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10);
+
     let uploads_dir = std::env::var("UPLOADS_DIR").unwrap_or_else(|_| "./uploads".into());
     let public_dir = std::env::var("PUBLIC_DIR").unwrap_or_else(|_| "../frontend/public".into());
     let port: u16 = std::env::var("PORT")
@@ -172,11 +250,35 @@ async fn main() {
 
     std::fs::create_dir_all(&uploads_dir).expect("Failed to create uploads directory");
 
-    let conn = init_db(&db_path).expect("Failed to initialize SQLite database");
+    let (active_pg_url, pg_pool) = if let Some(ref url) = postgres_url {
+        match init_postgres_db(url, postgres_pool_size) {
+            Ok(pool) => {
+                tracing::info!(
+                    "Connected to PostgreSQL cluster ({}) with pool_size={}",
+                    url,
+                    postgres_pool_size
+                );
+                (Some(url.clone()), pool)
+            }
+            Err(err) => {
+                tracing::warn!(
+                    "PostgreSQL connection warning ({err}); continuing with high-speed SQLite WAL mirror"
+                );
+                (None, Vec::new())
+            }
+        }
+    } else {
+        (None, Vec::new())
+    };
+
+    let conn = init_db(&db_path).expect("Failed to initialize database");
     let state = AppState {
         db: Arc::new(Mutex::new(conn)),
         uploads_dir,
         public_dir,
+        postgres_url: active_pg_url,
+        postgres_pool_size,
+        postgres_pool: Arc::new(Mutex::new(pg_pool)),
     };
 
     let app = build_app(state);
@@ -204,6 +306,9 @@ mod tests {
             db: Arc::new(Mutex::new(conn)),
             uploads_dir: tmp_dir.to_string_lossy().to_string(),
             public_dir: "../frontend/public".to_string(),
+            postgres_url: None,
+            postgres_pool_size: 4,
+            postgres_pool: Arc::new(Mutex::new(Vec::new())),
         };
         build_app(state)
     }
@@ -2495,4 +2600,533 @@ mod tests {
             "Revoked agent token must be rejected immediately with 401"
         );
     }
+
+    #[tokio::test]
+    async fn test_sharding_soft_quota_personas_and_idempotency() {
+        let app = setup_test_app();
+
+        // 1. Login as Aria Vance
+        let aria_login = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/auth/login")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            r#"{"email":"aria@justfans.local","password":"password123"}"#,
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        let aria_jwt = aria_login["token"].as_str().unwrap().to_string();
+
+        // 2. Mint an Agent Token on the `premium` pool with a tight daily_action_quota = 6 units
+        // so we can deterministically test smooth -> soft_paced -> cooldown_advisory transitions.
+        let mint_res = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/agent/tokens")
+                        .header("authorization", format!("Bearer {aria_jwt}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "name": "Aria Shard Pacing Agent",
+                                "pool_tier": "premium",
+                                "daily_action_quota": 6,
+                                "max_spend_per_tx": 50.0,
+                                "daily_spend_limit": 200.0
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(mint_res["success"], true);
+        assert_eq!(mint_res["pool_tier"], "premium");
+        assert_eq!(mint_res["daily_action_quota"], 6);
+        let shard_id = mint_res["shard_id"].as_i64().unwrap();
+        assert!((0..16).contains(&shard_id));
+        let agent_secret = mint_res["agent_token"].as_str().unwrap().to_string();
+
+        // 3. Call `post_create_or_update` (2.0 units) with `X-Idempotency-Key` HTTP header:
+        //    2.0 / 6.0 = 33.3% utilization -> throttle_mode = "smooth"
+        let first_post_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/mcp/tools/post_create_or_update")
+                    .header("x-agent-token", &agent_secret)
+                    .header("x-idempotency-key", "idem-drop-001")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "text": "Idempotent autonomous studio drop #1",
+                            "price": 0.0
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(first_post_resp.status(), StatusCode::OK);
+        assert_eq!(
+            first_post_resp
+                .headers()
+                .get("x-heav3ns-pool")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "premium"
+        );
+        assert!(first_post_resp
+            .headers()
+            .get("x-ratelimit-pacing-ms")
+            .is_some());
+        let first_post_json = body_json(first_post_resp).await;
+        let created_post_id = first_post_json["result"]["post"]["id"].as_i64().unwrap();
+        assert_eq!(
+            first_post_json["result"]["_quota_governance"]["throttle_mode"],
+            "smooth"
+        );
+        assert_eq!(
+            first_post_json["result"]["_heav3ns_governance"]["throttle_mode"],
+            "smooth"
+        );
+        assert_eq!(
+            first_post_json["result"]["_quota_governance"]["daily_units_used"],
+            2.0
+        );
+
+        // 4. Replay the exact same `X-Idempotency-Key` header: must return the cached post_id without
+        //    creating a duplicate post or charging additional quota units!
+        let replay_post_json = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/mcp/tools/post_create_or_update")
+                        .header("x-agent-token", &agent_secret)
+                        .header("x-idempotency-key", "idem-drop-001")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "text": "Idempotent autonomous studio drop #1",
+                                "price": 0.0
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            replay_post_json["result"]["post"]["id"].as_i64().unwrap(),
+            created_post_id
+        );
+        assert_eq!(
+            replay_post_json["result"]["_quota_governance"]["idempotent_replay"],
+            true
+        );
+        assert_eq!(
+            replay_post_json["result"]["_quota_governance"]["throttle_mode"],
+            "idempotent_replay"
+        );
+
+        // 4b. Verify failed tool call with X-Idempotency-Key cleans up its in-flight reservation so retry can succeed
+        let failed_idem_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/mcp/tools/post_create_or_update")
+                    .header("x-agent-token", &agent_secret)
+                    .header("x-idempotency-key", "idem-err-recover")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"text":"","attachments":[]}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(failed_idem_resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+        // 5. Call `post_create_or_update` (2.0 units) + `post_comment` (1.0 unit):
+        //    total = 2.0 + 2.0 (failed attempt consumed before validation or next call) -> reaches >= 75% -> "soft_paced"
+        let paced_cmt_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/mcp/tools/post_comment")
+                    .header("x-agent-token", &agent_secret)
+                    .header("x-idempotency-key", "idem-err-recover")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "post_id": created_post_id,
+                            "message": "Autonomous studio notes on lighting setup!"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(paced_cmt_resp.status(), StatusCode::OK);
+        let paced_cmt_json = body_json(paced_cmt_resp).await;
+        assert_eq!(paced_cmt_json["success"], true);
+        assert_eq!(
+            paced_cmt_json["result"]["_quota_governance"]["throttle_mode"],
+            "soft_paced"
+        );
+        assert!(
+            paced_cmt_json["result"]["_quota_governance"]["pacing_delay_ms"]
+                .as_i64()
+                .unwrap()
+                >= 20
+        );
+
+        // 6. Attempt `messenger_broadcast` (5.0 units): projected 10.0 > 6.0 daily limit ->
+        //    smooth "cooldown_advisory" response (HTTP 200 with structured retry_after_ms, no 500/429 crash)
+        let cooldown_json = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/mcp/tools/messenger_broadcast")
+                        .header("x-agent-token", &agent_secret)
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "message": "Burst broadcast test",
+                                "audience": "subscribers"
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(cooldown_json["result"]["throttled"], true);
+        assert_eq!(cooldown_json["result"]["status"], "cooldown_advisory");
+        assert!(
+            cooldown_json["result"]["_quota_governance"]["retry_after_ms"]
+                .as_i64()
+                .unwrap()
+                >= 1500
+        );
+
+        // 7. Introspection AND Read/Discovery tools (`account_whoami`, `persona_get`, `feed_read`)
+        //    MUST still succeed even during cooldown_advisory!
+        let whoami_during_cooldown = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/mcp/tools/account_whoami")
+                        .header("x-agent-token", &agent_secret)
+                        .header("content-type", "application/json")
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(whoami_during_cooldown["result"]["authenticated"], true);
+
+        let persona_get_during_cooldown = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/mcp/tools/persona_get")
+                        .header("x-agent-token", &agent_secret)
+                        .header("content-type", "application/json")
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert!(persona_get_during_cooldown["result"]["personas"]
+            .as_array()
+            .is_some());
+
+        let feed_read_during_cooldown = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/mcp/tools/feed_read")
+                        .header("x-agent-token", &agent_secret)
+                        .header("content-type", "application/json")
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert!(feed_read_during_cooldown["result"]["posts"]
+            .as_array()
+            .is_some());
+
+        // 8. Test Autonomous Persona Studio lifecycle (create persona -> evolve practice revision ->
+        //    optimistic concurrency check -> compile execution brief -> record immutable activity)
+        let create_persona_res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/agent/personas")
+                    .header("authorization", format!("Bearer {aria_jwt}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "handle": "aria-cyber-curator",
+                            "display_name": "Aria Cyber Curator",
+                            "description": "Autonomous visual curator & VIP community host.",
+                            "focus": "creator",
+                            "pool_tier": "studio",
+                            "autonomy_mode": "full_autonomous",
+                            "engagement_cadence": "high_touch",
+                            "principles": ["Never spam repetitive hooks", "Reward early poll voters"],
+                            "interests": ["Neo-Tokyo lighting", "Synthwave timelapses"],
+                            "methods": ["Publish poll before PPV gallery"],
+                            "direction": "Initial revision direction."
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(create_persona_res.status(), StatusCode::CREATED);
+        let persona_json = body_json(create_persona_res).await;
+        let persona_id = persona_json["persona"]["id"].as_str().unwrap().to_string();
+        assert_eq!(persona_json["persona"]["current_revision"], 1);
+        assert_eq!(persona_json["persona"]["pool_tier"], "studio");
+
+        // Evolve practice to revision #2
+        let rev2_res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/agent/personas/{persona_id}/practice"))
+                    .header("authorization", format!("Bearer {aria_jwt}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "expected_revision": 1,
+                            "focus": "doujin",
+                            "direction": "Focus on multi-page cyberpunk comic storyboards and subscriber polls."
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(rev2_res.status(), StatusCode::OK);
+        let rev2_json = body_json(rev2_res).await;
+        assert_eq!(rev2_json["persona"]["current_revision"], 2);
+
+        // Stale expected_revision (1 when current is 2) must return 409 Conflict
+        let stale_rev_res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/agent/personas/{persona_id}/practice"))
+                    .header("authorization", format!("Bearer {aria_jwt}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "expected_revision": 1,
+                            "direction": "Stale revision attempt"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(stale_rev_res.status(), StatusCode::CONFLICT);
+
+        // Record activity & compile no-inference execution brief
+        let act_res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/agent/personas/{persona_id}/activities"))
+                    .header("authorization", format!("Bearer {aria_jwt}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "action_type": "post_create_or_update",
+                            "target_resource_id": created_post_id.to_string(),
+                            "description": "Released storyboard preview and engaged with early voters."
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(act_res.status(), StatusCode::CREATED);
+
+        let brief_res = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("/api/agent/personas/{persona_id}/brief"))
+                        .header("authorization", format!("Bearer {aria_jwt}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "intent": "Announce Friday night VIP livestream and Q&A",
+                                "target_audience": "VIP tier subscribers"
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(brief_res["success"], true);
+        assert_eq!(brief_res["brief"]["practice_revision"], 2);
+        assert!(brief_res["brief"]["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("Aria Cyber Curator"));
+
+        // Verify GET /api/agent/shards returns 16 virtual shards and 3 pool tiers
+        let shards_res = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/agent/shards")
+                        .header("authorization", format!("Bearer {aria_jwt}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(shards_res["success"], true);
+        assert_eq!(
+            shards_res["telemetry"]["shards"].as_array().unwrap().len(),
+            16
+        );
+        assert_eq!(
+            shards_res["telemetry"]["pools"].as_array().unwrap().len(),
+            3
+        );
+    }
+
+    #[test]
+    fn test_postgres_cluster_pool_and_schema_migration() {
+        let pg_url = std::env::var("HEAV3NS_DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://postgres@127.0.0.1:54329/heav3ns_publishing".into());
+
+        // Connect to local PostgreSQL cluster if running and verify full 28-table DDL + multi-persona sync
+        if let Ok(pool) = init_postgres_db(&pg_url, 4) {
+            assert!(!pool.is_empty());
+            let conn = init_db(":memory:").expect("sqlite init");
+            let state = AppState {
+                db: Arc::new(Mutex::new(conn)),
+                uploads_dir: "./uploads".into(),
+                public_dir: "../frontend/public".into(),
+                postgres_url: Some(pg_url),
+                postgres_pool_size: 4,
+                postgres_pool: Arc::new(Mutex::new(pool)),
+            };
+            assert_eq!(state.db_engine_label(), "postgresql_pooled_sharded");
+
+            let table_count = state.with_postgres(|pg| {
+                let row = pg.query_one(
+                    "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public'",
+                    &[],
+                )?;
+                Ok(row.get::<_, i64>(0))
+            });
+            assert!(
+                table_count.unwrap_or(0) >= 28,
+                "PostgreSQL public schema must contain all 28 migrated tables"
+            );
+
+            // Verify a single creator (user_id = 2) can sync multiple autonomous personas into PostgreSQL
+            let p1 = crate::sharding::AgentPersonaView {
+                id: "persona-aria-test-1".into(),
+                user_id: 2,
+                handle: "aria-test-alpha".into(),
+                display_name: "Aria Alpha".into(),
+                description: "First test persona for multi-persona PostgreSQL residency".into(),
+                focus: "creator".into(),
+                shard_id: 3,
+                pool_tier: "premium".into(),
+                autonomy_mode: "autonomous_co_pilot".into(),
+                engagement_cadence: "balanced".into(),
+                current_revision: 1,
+                practices: vec![],
+                activities: vec![],
+                created_at: "2026-01-01T00:00:00Z".into(),
+                updated_at: "2026-01-01T00:00:00Z".into(),
+            };
+            let p2 = crate::sharding::AgentPersonaView {
+                id: "persona-aria-test-2".into(),
+                user_id: 2,
+                handle: "aria-test-beta".into(),
+                display_name: "Aria Beta".into(),
+                description: "Second test persona for the same creator user_id in PostgreSQL".into(),
+                focus: "studio".into(),
+                shard_id: 11,
+                pool_tier: "studio".into(),
+                autonomy_mode: "full_autonomous".into(),
+                engagement_cadence: "high_touch".into(),
+                current_revision: 2,
+                practices: vec![],
+                activities: vec![],
+                created_at: "2026-01-01T00:00:00Z".into(),
+                updated_at: "2026-01-01T00:00:00Z".into(),
+            };
+            state.sync_persona_to_postgres(&p1);
+            state.sync_persona_to_postgres(&p2);
+
+            let aria_pg_personas = state.with_postgres(|pg| {
+                let row = pg.query_one(
+                    "SELECT COUNT(*) FROM agent_personas WHERE user_id = 2",
+                    &[],
+                )?;
+                Ok(row.get::<_, i64>(0))
+            });
+            assert!(
+                aria_pg_personas.unwrap_or(0) >= 2,
+                "PostgreSQL agent_personas must allow multiple personas per creator user_id"
+            );
+        }
+    }
 }
+

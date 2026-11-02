@@ -16,6 +16,15 @@ export interface AgentTokenItem {
   max_spend_per_tx: number;
   daily_spend_limit: number;
   spent_last_24h: number;
+  spent_today?: number;
+  shard_id: number;
+  pool_tier: string;
+  daily_action_quota: number;
+  daily_units_used: number;
+  available_burst_tokens: number;
+  burst_capacity: number;
+  refill_rate_per_sec: number;
+  throttle_mode: string;
   is_active: boolean;
   last_used_at?: string | null;
   expires_at?: string | null;
@@ -32,8 +41,63 @@ export interface AgentAuditLogItem {
   resource_id?: string | null;
   status: string;
   amount_spent: number;
+  action_units?: number;
+  shard_id?: number;
+  pool_tier?: string;
+  throttle_mode?: string;
+  pacing_delay_ms?: number;
   details: string;
   created_at: string;
+}
+
+export interface PersonaPracticeRevisionItem {
+  revision: number;
+  focus: string;
+  principles: string[];
+  interests: string[];
+  methods: string[];
+  direction: string;
+  recorded_at: string;
+}
+
+export interface PersonaActivityItem {
+  id: string;
+  persona_id: string;
+  practice_revision: number;
+  action_type: string;
+  target_resource_id?: string | null;
+  description: string;
+  occurred_at: string;
+  recorded_at: string;
+}
+
+export interface AgentPersonaItem {
+  id: string;
+  user_id: number;
+  handle: string;
+  display_name: string;
+  description: string;
+  focus: string;
+  shard_id: number;
+  pool_tier: string;
+  autonomy_mode: string;
+  engagement_cadence: string;
+  current_revision: number;
+  practices: PersonaPracticeRevisionItem[];
+  activities: PersonaActivityItem[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ShardMetricItem {
+  shard_id: number;
+  pool_tier: string;
+  active_agents: number;
+  active_personas: number;
+  actions_logged: number;
+  soft_paced_events: number;
+  avg_pacing_ms: number;
+  load_status: string;
 }
 
 export interface UserProfile {
