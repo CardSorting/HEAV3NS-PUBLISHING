@@ -1,0 +1,1247 @@
+.table-wrapper{}
+
+.onboarding-page{
+    padding-top:.5rem;
+    color:var(--app-text);
+}
+
+.onboarding-summary,
+.onboarding-instructions{
+    padding:1rem;
+    border:1px solid var(--ui-border-subtle);
+    border-radius:.5rem;
+    background:var(--app-surface-raised);
+    overflow-wrap:anywhere;
+}
+
+.onboarding-summary-title{
+    margin:0;
+    font-size:1rem;
+    font-weight:600;
+    line-height:1.4;
+}
+
+.onboarding-list{
+    margin:.5rem 0 0;
+    padding:0;
+    list-style:none;
+}
+
+.onboarding-row{
+    display:flex;
+    align-items:flex-start;
+    gap:.8rem;
+    padding:1.15rem 0;
+    border-block-end:1px solid var(--ui-border-subtle);
+}
+
+.onboarding-row:last-child{
+    border-block-end:0;
+}
+
+.onboarding-row-icon{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    flex:0 0 1.25rem;
+    block-size:1.625rem;
+    color:var(--app-muted-strong);
+}
+
+.onboarding-row-copy{
+    flex:1 1 auto;
+    min-width:0;
+    overflow-wrap:anywhere;
+}
+
+.onboarding-row-heading{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    flex-wrap:wrap;
+    gap:.35rem 1rem;
+}
+
+.onboarding-status{
+    display:inline-block;
+    max-inline-size:100%;
+    padding:.2rem .55rem;
+    border-radius:999px;
+    background:var(--app-surface-raised);
+    color:var(--app-muted-strong);
+    font-size:.8125rem;
+    line-height:1.4;
+    overflow-wrap:anywhere;
+}
+
+.onboarding-instructions > :last-child{
+    margin-bottom:0;
+}
+
+.onboarding-footer{
+    margin-top:1rem;
+    color:var(--app-muted-strong);
+    font-size:.875rem;
+    overflow-wrap:anywhere;
+}
+
+.onboarding-page .onboarding-row-action{
+    display:inline-flex;
+    align-items:center;
+    min-height:2rem;
+}
+
+[dir="rtl"] .onboarding-page .onboarding-back-icon{
+    transform:scaleX(-1);
+}
+
+@media (pointer:coarse){
+    .onboarding-page .onboarding-row-action{
+        min-height:44px;
+    }
+
+    .verification-consent .form-check-label{
+        min-height:2.75rem;
+    }
+}
+
+.creator-onboarding-title{
+    font-size:1.375rem;
+    line-height:1.4;
+}
+
+.creator-onboarding-section-title,
+.verification-onboarding-section-title{
+    color:var(--app-muted-strong);
+    font-size:1rem;
+}
+
+.creator-onboarding .onboarding-list,
+.verification-onboarding .onboarding-list{
+    margin-top:0;
+}
+
+.creator-onboarding .onboarding-row,
+.verification-onboarding .onboarding-row{
+    gap:.9rem;
+    padding:1rem 0;
+}
+
+.creator-onboarding .onboarding-row-heading h4,
+.verification-onboarding .onboarding-row-heading h4{
+    font-size:1rem;
+    line-height:1.625rem;
+}
+
+.creator-onboarding .onboarding-row-copy p,
+.verification-onboarding .onboarding-row-copy p{
+    font-size:.875rem;
+}
+
+.creator-onboarding .onboarding-status,
+.verification-onboarding .onboarding-status{
+    font-size:.875rem;
+}
+
+.creator-onboarding .onboarding-row-action,
+.verification-onboarding .onboarding-row-action{
+    align-items:flex-start;
+}
+
+.creator-onboarding .creator-application-panel,
+.verification-onboarding .verification-documents-panel,
+.verification-onboarding .verification-guidance-panel{
+    background:var(--app-surface);
+}
+
+.creator-application-title,
+.verification-documents-title{
+    font-size:1.125rem;
+}
+
+.creator-onboarding .onboarding-instructions,
+.verification-onboarding .onboarding-instructions{
+    padding:0;
+    border:0;
+    background:transparent;
+}
+
+.creator-application-agreement .form-check-label{
+    min-height:2.75rem;
+    padding-block:.25rem;
+}
+
+.creator-application-agreement .form-check-input{
+    margin-top:.45rem;
+}
+
+.verification-document-dropzone{
+    --bs-border-style:dashed;
+    background:var(--app-surface-muted);
+}
+
+.verification-upload-trigger{
+    min-height:6rem;
+    font-size:1rem;
+    text-transform:none;
+}
+
+.settings-content{
+    --bs-border-color:var(--ui-border-subtle);
+    min-width:0;
+}
+
+.settings-content > hr{
+    color:var(--ui-border-subtle);
+    opacity:1;
+}
+
+.settings-data-page,
+.settings-payments-page{
+    padding:.55rem .9rem 0;
+}
+
+.account-email-status{
+    padding:.85rem .9rem;
+    border:1px solid rgba(0,0,0,.08);
+    border-radius:8px;
+    background:#f8fafc;
+    color:#5f6b7a;
+}
+
+.account-email-status-copy{
+    min-width:0;
+    padding-right:.75rem;
+}
+
+[dir="rtl"] .account-email-status-copy{
+    padding-right:0;
+    padding-left:.75rem;
+}
+
+.account-email-status-title{
+    color:#1f2937;
+    font-weight:700;
+    line-height:1.25;
+}
+
+.account-email-status-text{
+    margin-top:.2rem;
+    font-size:.875rem;
+    line-height:1.45;
+    overflow-wrap:anywhere;
+}
+
+.account-email-status-badge{
+    display:inline-flex;
+    align-items:center;
+    min-height:24px;
+    padding:.2rem .55rem;
+    border-radius:999px;
+    background:#eef2f7;
+    color:#475467;
+    font-size:.75rem;
+    font-weight:700;
+    line-height:1;
+    white-space:nowrap;
+}
+
+.account-email-status-actions{
+    display:flex;
+    align-items:center;
+    gap:.5rem;
+    flex-wrap:wrap;
+}
+
+[data-bs-theme="dark"] .account-email-status{
+    background:var(--app-surface);
+    border-color:var(--ui-border-subtle);
+    color:var(--app-muted-strong);
+}
+
+[data-bs-theme="dark"] .account-email-status .account-email-status-title{
+    color:var(--app-heading);
+}
+
+[data-bs-theme="dark"] .account-email-status .account-email-status-badge{
+    background:var(--app-surface-raised);
+    color:var(--app-text);
+}
+
+.account-email-panel,
+.settings-collapse-panel{
+    padding:1rem;
+    border:1px solid rgba(0,0,0,.08);
+    border-radius:8px;
+    background:rgba(0,0,0,.015);
+}
+
+.account-email-panel-header,
+.settings-collapse-panel-header{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:1rem;
+    width:100%;
+    padding:0;
+    border:0;
+    background:transparent;
+    color:inherit;
+    text-align:left;
+}
+
+[dir="rtl"] .account-email-panel-header,
+[dir="rtl"] .settings-collapse-panel-header{
+    text-align:right;
+}
+
+.account-email-panel-header:focus,
+.settings-collapse-panel-header:focus{
+    outline:0;
+}
+
+.account-email-panel-header:focus-visible,
+.settings-collapse-panel-header:focus-visible{
+    border-radius:6px;
+    box-shadow:0 0 0 3px rgba(0,0,0,.08);
+}
+
+.account-email-panel-copy,
+.settings-collapse-panel-copy{
+    flex:1 1 auto;
+    min-width:0;
+}
+
+.account-email-panel-caret,
+.settings-collapse-panel-caret{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    flex:0 0 auto;
+    color:#7a8491;
+    transition:transform .15s ease, color .15s ease;
+}
+
+.account-email-panel-header[aria-expanded="true"] .account-email-panel-caret,
+.settings-collapse-panel-header[aria-expanded="true"] .settings-collapse-panel-caret{
+    transform:rotate(180deg);
+}
+
+.account-email-panel-body,
+.settings-collapse-panel-body{
+    margin-top:1rem;
+    padding-top:1rem;
+    border-top:1px solid rgba(0,0,0,.08);
+}
+
+[data-bs-theme="dark"] .account-email-panel,
+[data-bs-theme="dark"] .settings-collapse-panel{
+    border-color:var(--ui-border-subtle);
+    background:var(--app-surface);
+}
+
+[data-bs-theme="dark"] .account-email-panel .account-email-panel-body,
+[data-bs-theme="dark"] .settings-collapse-panel .settings-collapse-panel-body{
+    border-top-color:var(--ui-border-subtle);
+}
+
+[data-bs-theme="dark"] .account-email-panel .account-email-panel-caret,
+[data-bs-theme="dark"] .settings-collapse-panel .settings-collapse-panel-caret{
+    color:var(--app-muted-strong);
+}
+
+.account-danger-panel{
+    padding:1rem;
+    border:1px solid rgba(0,0,0,.08);
+    border-radius:8px;
+    background:rgba(0,0,0,.015);
+}
+
+.account-danger-panel-header{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:1rem;
+    width:100%;
+    padding:0;
+    border:0;
+    background:transparent;
+    color:inherit;
+    text-align:left;
+}
+
+[dir="rtl"] .account-danger-panel-header{
+    text-align:right;
+}
+
+.account-danger-panel-header:focus{
+    outline:0;
+}
+
+.account-danger-panel-header:focus-visible{
+    border-radius:6px;
+    box-shadow:0 0 0 3px rgba(220,53,69,.14);
+}
+
+.account-danger-panel-copy{
+    flex:1 1 auto;
+    min-width:0;
+}
+
+.account-danger-panel-caret{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    flex:0 0 auto;
+    color:#7a8491;
+    transition:transform .15s ease, color .15s ease;
+}
+
+.account-danger-panel-header[aria-expanded="true"] .account-danger-panel-caret{
+    transform:rotate(180deg);
+}
+
+.account-danger-panel-body{
+    margin-top:1rem;
+    padding-top:1rem;
+    border-top:1px solid rgba(0,0,0,.08);
+}
+
+.account-delete-status{
+    padding:.85rem .9rem;
+    border:1px solid rgba(0,0,0,.08);
+    border-radius:8px;
+    background:#f8fafc;
+    color:#5f6b7a;
+}
+
+.account-delete-status-copy{
+    min-width:0;
+    padding-right:.75rem;
+}
+
+[dir="rtl"] .account-delete-status-copy{
+    padding-right:0;
+    padding-left:.75rem;
+}
+
+.account-delete-status-title{
+    color:#1f2937;
+    font-weight:700;
+    line-height:1.25;
+}
+
+.account-delete-status-text,
+.account-delete-status-date{
+    margin-top:.2rem;
+    font-size:.875rem;
+    line-height:1.45;
+}
+
+.account-delete-status-badge{
+    display:inline-flex;
+    align-items:center;
+    min-height:24px;
+    padding:.2rem .55rem;
+    border-radius:999px;
+    background:#eef2f7;
+    color:#475467;
+    font-size:.75rem;
+    font-weight:700;
+    line-height:1;
+    white-space:nowrap;
+}
+
+.account-delete-status-success{
+    background:#f0fbf5;
+    border-color:#b9e7cb;
+}
+
+.account-delete-status-success .account-delete-status-badge{
+    background:#dff6e9;
+    color:#1f7a4d;
+}
+
+.account-delete-status-danger{
+    background:#fff7f7;
+    border-color:#f3c5c5;
+}
+
+.account-delete-status-danger .account-delete-status-badge{
+    background:#fde8e8;
+    color:#b42318;
+}
+
+.account-delete-requirements{
+    padding:.85rem .9rem;
+    border:1px solid rgba(0,0,0,.08);
+    border-radius:8px;
+    background:#f8fafc;
+    color:#5f6b7a;
+}
+
+.account-delete-requirements-title{
+    color:#1f2937;
+    font-weight:700;
+    line-height:1.25;
+}
+
+.account-delete-requirements-text{
+    margin-top:.2rem;
+    font-size:.875rem;
+    line-height:1.45;
+}
+
+.account-delete-requirements-list{
+    display:grid;
+    gap:.45rem;
+    margin:.7rem 0 0;
+    padding:0;
+    list-style:none;
+}
+
+.account-delete-requirements-list li{
+    display:flex;
+    align-items:flex-start;
+    gap:.5rem;
+    font-size:.9rem;
+    line-height:1.35;
+}
+
+.account-delete-requirement-dot{
+    width:6px;
+    height:6px;
+    margin-top:.48rem;
+    border-radius:50%;
+    background:#98a2b3;
+    flex:0 0 auto;
+}
+
+.account-delete-review-note,
+.account-delete-confirm{
+    border:1px solid rgba(0,0,0,.08);
+    border-radius:8px;
+    background:#f8fafc;
+}
+
+.account-delete-review-note{
+    display:flex;
+    align-items:flex-start;
+    gap:.75rem;
+    padding:.85rem .9rem;
+    color:#5f6b7a;
+}
+
+.account-delete-review-icon{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    width:32px;
+    height:32px;
+    border-radius:50%;
+    background:#eef2f7;
+    color:#667085;
+    flex:0 0 auto;
+}
+
+.account-delete-review-copy{
+    display:block;
+    min-width:0;
+}
+
+.account-delete-review-title{
+    display:block;
+    color:#1f2937;
+    font-weight:700;
+    line-height:1.25;
+}
+
+.account-delete-review-text{
+    display:block;
+    margin-top:.15rem;
+    font-size:.875rem;
+    line-height:1.45;
+}
+
+.account-delete-confirm{
+    padding:.85rem .9rem;
+    background:#f8fafc;
+    border-color:rgba(0,0,0,.08);
+}
+
+.account-delete-confirm .form-check{
+    min-height:auto;
+}
+
+.account-delete-confirm .form-check-label{
+    display:block;
+    cursor:pointer;
+}
+
+.account-delete-confirm-title{
+    display:block;
+    color:#1f2937;
+    font-weight:700;
+    line-height:1.25;
+}
+
+.account-delete-confirm-text{
+    display:block;
+    margin-top:.15rem;
+    color:#5f6b7a;
+    font-size:.875rem;
+    line-height:1.45;
+}
+
+[data-bs-theme="dark"] .account-danger-panel{
+    border-color:var(--ui-border-subtle);
+    background:var(--app-surface);
+}
+
+[data-bs-theme="dark"] .account-danger-panel .account-danger-panel-body{
+    border-top-color:var(--ui-border-subtle);
+}
+
+[data-bs-theme="dark"] .account-danger-panel .account-danger-panel-caret{
+    color:var(--app-muted-strong);
+}
+
+[data-bs-theme="dark"] .account-danger-panel .account-delete-status{
+    background:var(--app-surface-muted);
+    border-color:var(--ui-border-subtle);
+    color:var(--app-muted-strong);
+}
+
+[data-bs-theme="dark"] .account-danger-panel .account-delete-status-title{
+    color:var(--app-heading);
+}
+
+[data-bs-theme="dark"] .account-danger-panel .account-delete-status-badge{
+    background:var(--app-surface-raised);
+    color:var(--app-text);
+}
+
+[data-bs-theme="dark"] .account-danger-panel .account-delete-status-success{
+    background:var(--theme-success-bg-subtle);
+    border-color:var(--theme-success-border-subtle);
+}
+
+[data-bs-theme="dark"] .account-danger-panel .account-delete-status-success .account-delete-status-badge{
+    background:var(--theme-success-bg-subtle);
+    color:var(--theme-success-text-emphasis);
+}
+
+[data-bs-theme="dark"] .account-danger-panel .account-delete-status-danger{
+    background:var(--theme-danger-bg-subtle);
+    border-color:var(--theme-danger-border-subtle);
+}
+
+[data-bs-theme="dark"] .account-danger-panel .account-delete-status-danger .account-delete-status-badge{
+    background:var(--theme-danger-bg-subtle);
+    color:var(--theme-danger-text-emphasis);
+}
+
+[data-bs-theme="dark"] .account-danger-panel .account-delete-requirements{
+    background:var(--app-surface-muted);
+    border-color:var(--ui-border-subtle);
+    color:var(--app-muted-strong);
+}
+
+[data-bs-theme="dark"] .account-danger-panel .account-delete-requirements-title{
+    color:var(--app-heading);
+}
+
+[data-bs-theme="dark"] .account-danger-panel .account-delete-requirement-dot{
+    background:var(--app-muted);
+}
+
+[data-bs-theme="dark"] .account-danger-panel .account-delete-review-note{
+    background:var(--app-surface-muted);
+    border-color:var(--ui-border-subtle);
+    color:var(--app-muted-strong);
+}
+
+[data-bs-theme="dark"] .account-danger-panel .account-delete-review-icon{
+    background:var(--app-surface-raised);
+    color:var(--app-text);
+}
+
+[data-bs-theme="dark"] .account-danger-panel .account-delete-review-title{
+    color:var(--app-heading);
+}
+
+[data-bs-theme="dark"] .account-danger-panel .account-delete-confirm{
+    background:var(--app-surface-muted);
+    border-color:var(--ui-border-subtle);
+}
+
+[data-bs-theme="dark"] .account-danger-panel .account-delete-confirm-title{
+    color:var(--app-heading);
+}
+
+[data-bs-theme="dark"] .account-danger-panel .account-delete-confirm-text{
+    color:var(--app-muted-strong);
+}
+
+.settings-data-stat-card,
+.settings-payments-stat-card{
+    border:1px solid var(--ui-border-subtle);
+    border-radius:14px;
+    background:var(--app-surface);
+    min-width:0;
+    height:100%;
+    padding:.65rem .8rem;
+}
+
+.settings-data-overview,
+.settings-payments-overview{
+    border:0;
+    border-radius:0;
+    background:transparent;
+    padding-right:1.1rem;
+    padding-left:1.1rem;
+    padding-top:1rem;
+    padding-bottom:1rem;
+}
+
+.settings-data-stat-label,
+.settings-payments-stat-label{
+    font-size:.8rem;
+    color:var(--app-muted);
+    margin-bottom:.25rem;
+}
+
+.settings-data-stat-value,
+.settings-payments-stat-value{
+    font-size:1.05rem;
+    font-weight:700;
+    line-height:1.2;
+    font-variant-numeric:tabular-nums;
+    overflow-wrap:anywhere;
+}
+
+.settings-data-stat-icon{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    width:20px;
+    height:20px;
+    color:var(--app-muted);
+    flex:0 0 auto;
+}
+
+.settings-payments-filter-toggle{
+    width:2rem;
+    height:2rem;
+    padding:0;
+    border:1px solid var(--app-border);
+    border-radius:50%;
+    background:var(--app-surface-muted);
+    color:var(--app-muted-strong);
+    box-shadow:none;
+}
+.settings-payments-filter-toggle:hover,
+.settings-payments-filter-toggle:focus,
+.settings-payments-filter-toggle[aria-expanded="true"]{
+    border-color:rgba(var(--theme-primary-rgb),.28);
+    background:rgba(var(--theme-primary-rgb),.08);
+    color:var(--theme-primary);
+}
+.settings-payments-filter-toggle:focus-visible{
+    outline:0;
+    box-shadow:0 0 0 .15rem var(--theme-focus-ring);
+}
+
+@media (pointer:coarse), (max-width:575.98px){
+    .settings-payments-filter-toggle{
+        width:2.75rem;
+        height:2.75rem;
+    }
+}
+
+.settings-payments-filter-menu { --filter-dropdown-width:20rem; }
+.settings-payments-filter-form { display:grid; gap:.875rem; }
+.settings-payments-filter-field { min-width:0; }
+.settings-payments-filter-field label { display:block; margin:0 0 .25rem; font-size:.75rem; }
+.settings-payments-filter-field .form-select { height:2.25rem; margin:0; }
+.settings-payments-filter-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:.5rem; }
+.settings-payments-filter-actions .btn { min-height:2.25rem; box-shadow:none; }
+
+.settings-data-meta,
+.settings-payments-meta{
+    line-height:1.2;
+    margin-top:.2rem;
+}
+
+.settings-data-cell-main,
+.settings-data-amount,
+.settings-payments-cell-main,
+.settings-payments-amount{
+    color:var(--app-text);
+}
+
+.settings-data-amount{
+    font-weight:600!important;
+}
+
+.settings-data-amount, .settings-payments-amount{
+    font-variant-numeric:tabular-nums;
+}
+
+.settings-data-party-link,
+.settings-payments-party-link{
+    color:var(--app-text);
+}
+
+.settings-subscriptions-avatar-link{
+    display:inline-flex;
+    vertical-align:middle;
+}
+
+.settings-data-table,
+.settings-payments-table{
+    --bs-border-color:color-mix(in srgb, var(--ui-border-subtle) 70%, transparent);
+    margin-left:-.9rem;
+    margin-right:-.9rem;
+}
+
+.settings-data-table-head,
+.settings-payments-table-head{
+    background:var(--app-surface-muted);
+}
+
+.settings-data-header-row,
+.settings-payments-header-row{
+    padding:.8rem 1.5rem;
+    font-size:.92rem;
+    color:var(--app-muted-strong);
+}
+
+.settings-data-header-row > *,
+.settings-payments-header-row > *,
+.settings-data-table-body .settings-data-row > *,
+.settings-payments-table-body .settings-payments-row > *{
+    min-width:0;
+    padding-left:.5rem;
+    padding-right:.5rem;
+}
+
+.settings-data-action-cell,
+.settings-payments-action-cell{
+    padding-left:.3rem !important;
+    padding-right:.3rem !important;
+}
+
+.settings-data-table-body .settings-data-row,
+.settings-payments-table-body .settings-payments-row{
+    padding:.78rem 1.5rem;
+    transition:background-color .12s ease;
+}
+
+.settings-payments-header-row,
+.settings-payments-row{
+    grid-template-columns:minmax(0, 1.5fr) minmax(6rem, 1fr) minmax(0, 1.3fr) 2.75rem;
+}
+
+.settings-subscriptions-table .settings-data-header-row,
+.settings-subscriptions-row{
+    grid-template-columns:minmax(0, 1.5fr) minmax(4.5rem, 1fr) minmax(0, 1fr) 2.75rem;
+}
+
+.settings-subscriptions-table .settings-data-action-cell,
+.settings-payments-table .settings-payments-action-cell{
+    padding:0 !important;
+}
+
+@media (min-width:992px){
+    .settings-subscriptions-table .settings-data-header-row,
+    .settings-subscriptions-row{
+        grid-template-columns:minmax(0, 2fr) minmax(5rem, 1fr) minmax(0, 1fr) minmax(0, 1.15fr) minmax(0, 1.15fr) 2.75rem;
+    }
+
+    .settings-payments-header-row,
+    .settings-payments-row{
+        grid-template-columns:minmax(0, 2fr) minmax(6rem, 1fr) minmax(0, 1.35fr) minmax(0, 1.35fr) minmax(0, 1.35fr) 2.75rem;
+    }
+}
+
+.settings-data-pagination,
+.settings-payments-pagination{
+    overflow:visible;
+}
+
+.settings-data-status-badge{
+    border:1px solid transparent;
+    font-size:.75rem;
+    line-height:1.2;
+    padding:.3rem .45rem;
+    border-radius:.375rem;
+    font-weight:600;
+    max-width:100%;
+    white-space:normal;
+}
+
+.settings-data-status-badge.bg-primary,
+.settings-data-status-badge.bg-secondary,
+.settings-data-status-badge.bg-success,
+.settings-data-status-badge.bg-info,
+.settings-data-status-badge.bg-warning,
+.settings-data-status-badge.bg-danger{
+    background:var(--theme-status-bg-subtle) !important;
+    color:var(--theme-status-text-emphasis) !important;
+}
+
+.settings-data-status-badge.bg-primary{
+    --theme-status-bg-subtle:var(--theme-primary-bg-subtle);
+    --theme-status-text-emphasis:var(--theme-primary-text-emphasis);
+}
+
+.settings-data-status-badge.bg-secondary{
+    --theme-status-bg-subtle:var(--theme-secondary-bg-subtle);
+    --theme-status-text-emphasis:var(--theme-secondary-text-emphasis);
+}
+
+.settings-data-status-badge.bg-success{
+    --theme-status-bg-subtle:var(--theme-success-bg-subtle);
+    --theme-status-text-emphasis:var(--theme-success-text-emphasis);
+}
+
+.settings-data-status-badge.bg-info{
+    --theme-status-bg-subtle:var(--theme-info-bg-subtle);
+    --theme-status-text-emphasis:var(--theme-info-text-emphasis);
+}
+
+.settings-data-status-badge.bg-warning{
+    --theme-status-bg-subtle:var(--theme-warning-bg-subtle);
+    --theme-status-text-emphasis:var(--theme-warning-text-emphasis);
+}
+
+.settings-data-status-badge.bg-danger{
+    --theme-status-bg-subtle:var(--theme-danger-bg-subtle);
+    --theme-status-text-emphasis:var(--theme-danger-text-emphasis);
+}
+
+.settings-data-action-btn,
+.settings-payments-action-btn{
+    opacity:.58;
+    transition:opacity .12s ease, background-color .12s ease, border-color .12s ease;
+}
+
+.settings-data-row:hover .settings-data-action-btn,
+.settings-data-action-btn:focus,
+.settings-data-action-btn[aria-expanded="true"],
+.settings-payments-row:hover .settings-payments-action-btn,
+.settings-payments-action-btn:focus,
+.settings-payments-action-btn[aria-expanded="true"]{
+    opacity:1;
+}
+
+[data-bs-theme="dark"] .settings-data-page .settings-data-meta,
+[data-bs-theme="dark"] .settings-payments-page .settings-payments-meta{
+    color:var(--app-muted) !important;
+}
+
+.settings-data-empty-state,
+.settings-payments-empty-state{
+    margin:.5rem 0 1rem;
+    padding:2.25rem 1.5rem;
+    border:1px dashed rgba(0,0,0,.12);
+    border-radius:16px;
+    background:rgba(255,255,255,.72);
+}
+
+.settings-data-empty-title,
+.settings-payments-empty-title{
+    font-size:1.05rem;
+    font-weight:700;
+    color:#344054;
+}
+
+.settings-data-empty-copy,
+.settings-payments-empty-copy{
+    max-width:440px;
+    margin:.5rem auto 0;
+    line-height:1.45;
+}
+
+[data-bs-theme="dark"] .settings-data-page .settings-data-empty-state,
+[data-bs-theme="dark"] .settings-payments-page .settings-payments-empty-state{
+    background:transparent;
+    border-color:rgba(255,255,255,.1);
+}
+
+[data-bs-theme="dark"] .settings-data-page .settings-data-empty-title,
+[data-bs-theme="dark"] .settings-payments-page .settings-payments-empty-title{
+    color:var(--app-heading);
+}
+
+.settings-subscriptions-empty-state{
+    min-height:260px;
+    padding:2rem 1.5rem;
+}
+
+[data-bs-theme="dark"] .settings-data-page .settings-subscriptions-empty-state .app-empty-state-icon{
+    background:var(--app-surface-raised);
+    color:var(--app-muted);
+}
+
+@media (max-width: 767px) {
+    .account-danger-panel{
+        padding:.85rem;
+    }
+
+    .settings-data-page,
+    .settings-payments-page{
+        padding:.45rem .75rem 0;
+    }
+
+    .settings-data-table,
+    .settings-payments-table{
+        margin-left:-.75rem;
+        margin-right:-.75rem;
+    }
+
+    .settings-data-pagination,
+    .settings-payments-pagination{
+        overflow:visible;
+    }
+
+    .settings-data-overview,
+    .settings-payments-overview{
+        padding:1rem 0;
+    }
+
+    .settings-data-header-row,
+    .settings-payments-header-row{
+        padding:.8rem .5rem;
+    }
+
+    .settings-data-table-body .settings-data-row,
+    .settings-payments-table-body .settings-payments-row{
+        padding:.78rem .5rem;
+    }
+
+    .settings-data-header-row > *,
+    .settings-payments-header-row > *,
+    .settings-data-table-body .settings-data-row > *,
+    .settings-payments-table-body .settings-payments-row > *{
+        padding-left:.25rem;
+        padding-right:.25rem;
+    }
+
+    .settings-data-action-cell,
+    .settings-payments-action-cell{
+        padding-left:.25rem !important;
+        padding-right:.25rem !important;
+    }
+
+    .settings-data-stat-card,
+    .settings-payments-stat-card{
+        padding:.7rem .8rem;
+        border-radius:12px;
+    }
+}
+
+.profileAvatar-settings {
+    width: 4rem;
+    height: 4rem;
+}
+
+.nav{
+    flex-wrap:nowrap;
+}
+
+.verify-form .dropzone{
+    min-height: auto!important;
+}
+
+.verify-form .dropzone .dz-preview.dz-image-preview {
+    background: transparent!important;
+}
+
+.verify-form .dropzone .dz-preview:hover .dz-image img {
+    -webkit-filter: blur(2px)!important;
+    filter: blur(2px)!important;
+}
+
+.verify-form .dropzone .dz-preview .dz-filename{
+    display: none!important;
+}
+
+.verify-form .dropzone .dz-preview {
+    min-height: unset;
+}
+
+.manual-payment-uploader {
+    min-height: 100px!important;
+}
+
+.profile-cover-bg .h-pill, .avatar-holder .h-pill
+{
+    width: 30px;
+    height: 30px;
+}
+
+@media (max-width: 767px) {
+    .settings-content {
+        border:none!important;
+    }
+}
+
+.dz-filename{
+    display: none;
+}
+
+.fa-details-label{
+    margin-left: -36px;
+}
+
+
+.table-wrapper .rounded-circle.user-avatar{
+    width: 36px;
+    height: 36px;
+}
+
+.CodeMirror, .CodeMirror-scroll {
+    min-height: 100px;
+}
+
+
+/* Social links remove button (subtle) */
+.social-remove-btn{
+    width: 25px;
+    height: 25px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    border: 1px solid rgba(0,0,0,.12);
+    background: rgba(0,0,0,.02);
+    color: rgba(0,0,0,.55);
+
+    padding: 0;
+    cursor: pointer;
+    transition: background-color .08s ease, border-color .08s ease, color .08s ease, transform .08s ease;
+}
+
+.social-remove-btn ion-icon{
+    font-size: 15px;
+}
+
+.social-remove-btn:hover{
+    background: rgba(220, 53, 69, .08);
+    border-color: rgba(220, 53, 69, .35);
+    color: #dc3545;
+    transform: translateY(-1px);
+}
+
+.social-remove-btn:disabled{
+    opacity: .35;
+    cursor: not-allowed;
+    transform: none;
+}
+
+
+/* Avatar & Cover uploading state */
+/* =========================
+   Shared loader base
+   ========================= */
+.profile-asset-loading {
+    position: absolute;
+    inset: 0;
+    z-index: 10;
+    pointer-events: none;
+    background: rgba(0,0,0,0.35); /* default (cover) */
+}
+
+/* =========================
+   Loading state behavior
+   ========================= */
+.profile-cover-bg.loading .card-img-top,
+.avatar-holder.loading .card-img-top {
+    filter: blur(6px) brightness(0.95);
+    transition: filter 0.25s ease;
+}
+
+/* Disable interactions while loading */
+.profile-cover-bg.loading,
+.avatar-holder.loading {
+    pointer-events: none;
+}
+
+/* =========================
+   Shimmer animation
+   ========================= */
+.profile-asset-loading .shimmer {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+        110deg,
+        rgba(255,255,255,0.15) 25%,
+        rgba(255,255,255,0.45) 37%,
+        rgba(255,255,255,0.15) 63%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.2s linear infinite;
+}
+
+@keyframes shimmer {
+    to { background-position: -200% 0; }
+}
+
+/* =========================
+   Cover container
+   ========================= */
+.profile-cover-bg {
+    position: relative;
+    z-index: 1;
+    overflow: hidden;
+}
+
+/* =========================
+   Avatar container
+   ========================= */
+.avatar-holder {
+    position: relative;
+    z-index: 5;           /* above cover */
+    overflow: visible;   /* keep ring working */
+}
+
+/* Avatar image */
+.avatar-holder .card-img-top {
+    border-radius: 50%;
+    border: 2px solid #fff;
+    background: #fff;
+}
+
+/* Remove Bootstrap card artifacts */
+.avatar-holder.card {
+    background: transparent;
+    box-shadow: none;
+    border: none;
+}
+
+/* Avatar-specific loader tweaks */
+.avatar-holder .profile-asset-loading {
+    border-radius: 50%;
+    overflow: hidden;
+    background: rgba(0,0,0,0.18); /* lighter than cover */
+}
+
+/* Spotify settings block */
+.spotify-card-avatar {
+    width: 40px;
+    height: 40px;
+    object-fit: cover;
+}
+
+.spotify-artist-tile {
+    width: 85px;
+    height: 85px;
+    object-fit: cover;
+}
+
+.spotify-artist-wrapper{
+    width: 85px;
+}

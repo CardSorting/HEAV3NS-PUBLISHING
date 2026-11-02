@@ -1,0 +1,261 @@
+// Brand contract shared with the theme service. These values keep a clean
+// install usable; generated theme.css overrides only --theme-* variables.
+@mixin brand-fallbacks($primary-color, $is-light) {
+    $hover: lighten($primary-color, 8%);
+    $active: lighten($primary-color, 12%);
+    $text-emphasis: lighten($primary-color, 20%);
+    $bg-opacity: .18;
+    $link-hover: lighten($primary-color, 15%);
+    @if $is-light {
+        $hover: darken($primary-color, 8%);
+        $active: darken($primary-color, 12%);
+        $text-emphasis: darken($primary-color, 20%);
+        $bg-opacity: .1;
+        $link-hover: darken($primary-color, 10%);
+    }
+
+    --theme-primary: #{$primary-color};
+    --theme-primary-rgb: #{red($primary-color)}, #{green($primary-color)}, #{blue($primary-color)};
+    --theme-primary-hover: #{$hover};
+    --theme-primary-active: #{$active};
+    --theme-on-primary: #{$white};
+    --theme-primary-text-emphasis: #{$text-emphasis};
+    --theme-primary-bg-subtle: #{rgba($primary-color, $bg-opacity)};
+    --theme-primary-border-subtle: #{rgba($primary-color, .3)};
+    --theme-link: #{$primary-color};
+    --theme-link-rgb: #{red($primary-color)}, #{green($primary-color)}, #{blue($primary-color)};
+    --theme-link-hover: #{$link-hover};
+    --theme-link-hover-rgb: #{red($link-hover)}, #{green($link-hover)}, #{blue($link-hover)};
+    --theme-focus-ring: #{rgba($primary-color, .2)};
+    --theme-gradient-from: #{$primary-gradient};
+    --theme-gradient-to: #{$primary-gradient-state};
+    --theme-gradient-from-rgb: #{red($primary-gradient)}, #{green($primary-gradient)}, #{blue($primary-gradient)};
+    --theme-gradient-to-rgb: #{red($primary-gradient-state)}, #{green($primary-gradient-state)}, #{blue($primary-gradient-state)};
+}
+
+@mixin semantic-fallbacks($colors, $is-light) {
+    @each $name, $color in $colors {
+        $hover: lighten($color, 8%);
+        $active: lighten($color, 12%);
+        $text-emphasis: lighten($color, 15%);
+        @if $is-light {
+            $hover: darken($color, 8%);
+            $active: darken($color, 12%);
+            $text-emphasis: darken($color, 20%);
+        }
+
+        --theme-#{$name}: #{$color};
+        --theme-#{$name}-rgb: #{red($color)}, #{green($color)}, #{blue($color)};
+        --theme-#{$name}-hover: #{$hover};
+        --theme-#{$name}-active: #{$active};
+        --theme-on-#{$name}: #{color-yiq($color)};
+        --theme-#{$name}-text-emphasis: #{$text-emphasis};
+        --theme-#{$name}-bg-subtle: #{rgba($color, .12)};
+        --theme-#{$name}-border-subtle: #{rgba($color, .28)};
+    }
+}
+
+:root, [data-bs-theme="light"] {
+    @include brand-fallbacks($primary, true);
+    @include semantic-fallbacks(map-remove($theme-colors, "primary"), true);
+    --theme-body-bg: #{$body-bg};
+    --theme-on-surface-inverse: #fff;
+    --theme-primary-soft-opacity: .1;
+    --home-theme-primary-rgb: #{red($primary)}, #{green($primary)}, #{blue($primary)};
+}
+
+[data-bs-theme="dark"] {
+    @include brand-fallbacks($primary-alt, false);
+    @include semantic-fallbacks((secondary: $secondary, success: $success-alt, info: $info-alt, warning: $warning-alt, danger: $red-alt, light: $gray-100-alt, dark: $body-bg-dark), false);
+    --theme-body-bg: var(--ui-page);
+    --theme-on-surface-inverse: #111;
+    --theme-primary-soft-opacity: .16;
+    --home-theme-primary-rgb: #{red($primary-alt)}, #{green($primary-alt)}, #{blue($primary-alt)};
+}
+
+:root, [data-bs-theme="light"], [data-bs-theme="dark"] {
+    --home-theme-primary-gradient: var(--theme-gradient-from);
+    --home-theme-primary-gradient-state: var(--theme-gradient-to);
+    --home-theme-primary-gradient-rgb: var(--theme-gradient-from-rgb);
+    --home-theme-primary-gradient-state-rgb: var(--theme-gradient-to-rgb);
+    --app-primary: var(--theme-primary);
+    --app-primary-rgb: var(--theme-primary-rgb);
+    --app-primary-hover: var(--theme-primary-hover);
+    --app-primary-soft: rgba(var(--theme-primary-rgb), var(--theme-primary-soft-opacity));
+    --app-on-primary: var(--theme-on-primary);
+    --app-focus-ring: var(--theme-focus-ring);
+    --app-gradient-from-rgb: var(--theme-gradient-from-rgb);
+    --app-gradient-to-rgb: var(--theme-gradient-to-rgb);
+
+    @each $name in primary, secondary, success, info, warning, danger, light, dark {
+        --#{$name}: var(--theme-#{$name});
+        --bs-#{$name}: var(--theme-#{$name});
+        --bs-#{$name}-rgb: var(--theme-#{$name}-rgb);
+        --bs-#{$name}-text-emphasis: var(--theme-#{$name}-text-emphasis);
+        --bs-#{$name}-bg-subtle: var(--theme-#{$name}-bg-subtle);
+        --bs-#{$name}-border-subtle: var(--theme-#{$name}-border-subtle);
+    }
+    --bs-body-bg: var(--theme-body-bg);
+    --bs-body-color: var(--app-text);
+    --bs-emphasis-color: var(--app-heading);
+    --bs-heading-color: var(--app-heading);
+    --bs-secondary-color: var(--app-muted);
+    --bs-secondary-bg: var(--app-surface-muted);
+    --bs-tertiary-color: var(--app-muted-strong);
+    --bs-tertiary-bg: var(--app-surface-raised);
+    --bs-border-color: var(--app-border);
+    --bs-border-color-translucent: var(--app-border);
+    --bs-link-color: var(--theme-link);
+    --bs-link-color-rgb: var(--theme-link-rgb);
+    --bs-link-hover-color: var(--theme-link-hover);
+    --bs-link-hover-color-rgb: var(--theme-link-hover-rgb);
+    --bs-focus-ring-color: var(--theme-focus-ring);
+}
+
+@mixin theme-component-variant($name) {
+    .bg-#{$name}, .text-bg-#{$name} {
+        background-color: rgba(var(--theme-#{$name}-rgb), var(--bs-bg-opacity, 1)) !important;
+    }
+    .badge.bg-#{$name}, .badge.text-bg-#{$name}, .text-bg-#{$name} {
+        color: var(--theme-on-#{$name}) !important;
+    }
+    .btn-#{$name} {
+        --bs-btn-color: var(--theme-on-#{$name});
+        --bs-btn-bg: var(--theme-#{$name});
+        --bs-btn-border-color: var(--theme-#{$name});
+        --bs-btn-hover-color: var(--theme-on-#{$name});
+        --bs-btn-hover-bg: var(--theme-#{$name}-hover);
+        --bs-btn-hover-border-color: var(--theme-#{$name}-hover);
+        --bs-btn-focus-shadow-rgb: var(--theme-#{$name}-rgb);
+        --bs-btn-active-color: var(--theme-on-#{$name});
+        --bs-btn-active-bg: var(--theme-#{$name}-active);
+        --bs-btn-active-border-color: var(--theme-#{$name}-active);
+        --bs-btn-disabled-color: var(--theme-on-#{$name});
+        --bs-btn-disabled-bg: var(--theme-#{$name});
+        --bs-btn-disabled-border-color: var(--theme-#{$name});
+    }
+    .btn-outline-#{$name} {
+        --bs-btn-color: var(--theme-#{$name});
+        --bs-btn-border-color: var(--theme-#{$name});
+        --bs-btn-hover-color: var(--theme-on-#{$name});
+        --bs-btn-hover-bg: var(--theme-#{$name});
+        --bs-btn-hover-border-color: var(--theme-#{$name});
+        --bs-btn-focus-shadow-rgb: var(--theme-#{$name}-rgb);
+        --bs-btn-active-color: var(--theme-on-#{$name});
+        --bs-btn-active-bg: var(--theme-#{$name}-active);
+        --bs-btn-active-border-color: var(--theme-#{$name}-active);
+        --bs-btn-disabled-color: var(--theme-#{$name});
+        --bs-btn-disabled-bg: transparent;
+        --bs-btn-disabled-border-color: var(--theme-#{$name});
+    }
+    .alert-#{$name} {
+        --bs-alert-color: var(--theme-#{$name}-text-emphasis);
+        --bs-alert-bg: var(--theme-#{$name}-bg-subtle);
+        --bs-alert-border-color: var(--theme-#{$name}-border-subtle);
+        --bs-alert-link-color: var(--theme-#{$name}-text-emphasis);
+    }
+    .list-group-item-#{$name} {
+        --bs-list-group-color: var(--theme-#{$name}-text-emphasis);
+        --bs-list-group-bg: var(--theme-#{$name}-bg-subtle);
+        --bs-list-group-border-color: var(--theme-#{$name}-border-subtle);
+        --bs-list-group-action-hover-color: var(--theme-#{$name}-text-emphasis);
+        --bs-list-group-action-hover-bg: var(--theme-#{$name}-border-subtle);
+        --bs-list-group-action-active-color: var(--theme-#{$name}-text-emphasis);
+        --bs-list-group-action-active-bg: var(--theme-#{$name}-border-subtle);
+        --bs-list-group-active-color: var(--theme-on-#{$name});
+        --bs-list-group-active-bg: var(--theme-#{$name});
+        --bs-list-group-active-border-color: var(--theme-#{$name});
+    }
+}
+
+@each $name in primary, secondary, success, info, warning, danger, light, dark {
+    @include theme-component-variant($name);
+}
+
+// Preserve the existing Soft UI semantic gradients. Customer-generated themes
+// own the primary gradient only; the remaining component gradients are product
+// design values, not Bootstrap defaults.
+@each $name, $gradient in $theme-gradient-colors {
+    .alert-#{$name} {
+        background-image: linear-gradient(310deg, nth($gradient, 1), darken(nth($gradient, -1), 8%));
+    }
+}
+
+.alert-primary {
+    background-image: linear-gradient(310deg, var(--theme-gradient-from), var(--theme-gradient-to));
+    @supports (color: color-mix(in srgb, black, white)) {
+        background-image: linear-gradient(310deg, var(--theme-gradient-from), color-mix(in srgb, var(--theme-gradient-to) 84%, black));
+    }
+}
+
+.btn {
+    letter-spacing: $a-letter-spacing;
+    text-transform: uppercase;
+    box-shadow: $btn-box-shadow;
+    background-size: $btn-background-size;
+    background-position-x: $btn-background-position-x;
+}
+.btn:not([class*="btn-outline-"]) { border: 0; }
+.btn[class*="btn-outline-"] {
+    --bs-btn-box-shadow: none;
+    --bs-btn-active-shadow: none;
+    box-shadow: none;
+
+    &:focus-visible,
+    .btn-check:focus-visible + & {
+        box-shadow: var(--bs-btn-focus-box-shadow);
+    }
+}
+.btn-link { --bs-btn-color: var(--theme-link); --bs-btn-hover-color: var(--theme-link-hover); }
+.btn-round { border-radius: 1.875rem; }
+.btn-grow { transition: transform .2s ease-in-out; }
+.btn-grow:hover { transform: scale(1.02); }
+.btn-outline-white { color: #fff; border-color: rgba(255, 255, 255, .75); background: rgba(255, 255, 255, .1); }
+.btn-success, .btn-success:focus, .btn.bg-gradient-success:focus { color: #fff !important; }
+.icon-move-right i, .icon-move-left i { transition: $btn-icon-transition; }
+.icon-move-right:hover i, .icon-move-right:focus i { transform: $btn-icon-transform-right; }
+.icon-move-left:hover i, .icon-move-left:focus i { transform: $btn-icon-transform-left; }
+.text-on-primary { color: var(--theme-on-primary) !important; }
+@each $name, $gradient in $theme-gradient-colors {
+    .bg-gradient-#{$name} { background-image: linear-gradient(310deg, nth($gradient, 1), nth($gradient, -1)); }
+}
+@each $name in primary, secondary, success, info, warning, danger, light, dark {
+    .bg-gradient-faded-#{$name} { background-image: radial-gradient(370px circle at 80% 50%, rgba(var(--theme-#{$name}-rgb), .6) 0, var(--theme-#{$name}-active) 100%); }
+    .bg-gradient-faded-#{$name}-vertical { background-image: radial-gradient(200px circle at 50% 70%, rgba(var(--theme-#{$name}-rgb), .3) 0, var(--theme-#{$name}) 100%); }
+}
+.bg-gradient-primary, .text-gradient.text-primary { background-image: linear-gradient(310deg, var(--theme-gradient-from), var(--theme-gradient-to)); }
+.text-gradient { color: transparent !important; background-clip: text; -webkit-text-fill-color: transparent; }
+.form-control, .form-select { background-color: var(--app-input-bg); }
+.form-control:focus, .form-select:focus, .form-check-input:focus {
+    border-color: var(--theme-primary);
+    box-shadow: 0 0 0 .2rem var(--theme-focus-ring);
+}
+.form-check-input:checked, .form-check-input[type="checkbox"]:indeterminate {
+    background-color: var(--theme-primary);
+    border-color: var(--theme-primary);
+}
+.card { --bs-card-bg: var(--app-surface); --bs-card-border-color: var(--app-border); }
+.modal { --bs-modal-bg: var(--app-surface); --bs-modal-color: var(--app-text); --bs-modal-border-color: var(--app-border); }
+.dropdown-menu {
+    --bs-dropdown-color: var(--app-text);
+    --bs-dropdown-bg: var(--app-surface);
+    --bs-dropdown-border-color: var(--app-border);
+    --bs-dropdown-divider-bg: var(--app-border);
+    --bs-dropdown-link-color: var(--app-text);
+    --bs-dropdown-link-hover-color: var(--app-heading);
+    --bs-dropdown-link-hover-bg: var(--app-surface-muted);
+    --bs-dropdown-link-active-color: var(--theme-on-primary);
+    --bs-dropdown-link-active-bg: var(--theme-primary);
+}
+.list-group { --bs-list-group-bg: var(--app-surface); --bs-list-group-color: var(--app-text); --bs-list-group-active-bg: var(--theme-primary); --bs-list-group-active-border-color: var(--theme-primary); --bs-list-group-active-color: var(--theme-on-primary); }
+.nav-pills { --bs-nav-pills-link-active-bg: var(--theme-primary); --bs-nav-pills-link-active-color: var(--theme-on-primary); }
+.pagination { --bs-pagination-active-bg: var(--theme-primary); --bs-pagination-active-border-color: var(--theme-primary); --bs-pagination-active-color: var(--theme-on-primary); }
+.progress { --bs-progress-bar-bg: var(--theme-primary); }
+::selection { background: var(--theme-primary); color: var(--theme-on-primary); }
+.btn .badge { position: relative; top: -1px; }
+.badge { font-weight: 600; }
+.badge { padding: .5rem; }
+.badge-sm { padding-top: 6px; padding-bottom: 6px; }
+@each $name in primary, secondary, success, info, warning, danger, light, dark {
+    .badge-#{$name}-outline { color: var(--theme-#{$name}) !important; border: 1px solid var(--theme-#{$name}) !important; background: transparent !important; }
+}

@@ -1,0 +1,70 @@
+/* Post-only layout. Shared messenger, story, reel and Vault previews stay unchanged. */
+.post-composer { padding: .75rem 0 1.5rem; }
+.post-composer [hidden] { display: none !important; }
+.post-composer-caption-header,
+.post-composer-toolbar,
+.post-composer-add-actions,
+.post-composer-settings { display: flex; align-items: center; gap: .5rem; }
+.post-composer-caption-header { justify-content: space-between; flex-wrap: wrap; margin-bottom: .5rem; }
+.post-composer .hl-textarea { min-height: 8rem !important; }
+.post-composer .post-composer-action,
+.post-composer .post-composer-setting { display: inline-flex; align-items: center; justify-content: center; gap: .35rem; min-height: 2.25rem; padding: .4rem .55rem; border: 0; background: transparent; color: inherit; font: inherit; }
+.post-composer button:disabled { opacity: .55; cursor: default; }
+.post-composer .ai-suggest-link { margin-inline-start: auto; }
+.post-composer-footer { margin-top: 1.25rem; padding-top: .75rem; border-top: 1px solid rgba(127,127,127,.18); }
+.post-composer-settings { flex-wrap: wrap; margin-bottom: .75rem; }
+.post-composer .post-composer-setting { border: 1px solid rgba(127,127,127,.22); border-radius: .4rem; font-size: .8125rem; text-align: start; justify-content: flex-start; }
+.post-composer-setting .ion-icon-wrapper { flex-shrink: 0; }
+.post-composer-setting > span { overflow-wrap: anywhere; min-width: 0; }
+.post-composer-toolbar { flex-wrap: wrap; justify-content: space-between; gap: .75rem; }
+.post-composer-add-actions { flex-wrap: wrap; gap: .125rem; }
+.post-composer .post-composer-action { min-height: 2.5rem; font-size: .875rem; white-space: nowrap; }
+.post-composer-action .icon-medium { width: 1.125rem; height: 1.125rem; flex-shrink: 0; }
+.post-composer .post-create-button { min-width: 6rem; margin-inline-start: auto; }
+.post-composer-more.dropdown .dropdown-menu { display: none; min-width: 14rem; max-width: calc(100vw - 2rem); transform: none !important; transition: none; }
+.post-composer-more.dropdown .dropdown-menu.show { display: block; transform: none !important; }
+.post-composer-more .dropdown-item { display: flex; align-items: center; gap: .6rem; min-height: 2.5rem; white-space: normal; }
+.post-composer-more .dropdown-item .ion-icon-wrapper { flex-shrink: 0; }
+.post-setting-check { margin-inline-start: auto; }
+.post-composer-media-count { margin: 1.25rem 0 .625rem; }
+.post-composer .post-composer-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 8.5rem), 1fr)); align-items: start; gap: .75rem; padding: 0; margin: 0; }
+.post-composer-grid:empty { display: none; }
+.post-composer-grid .vault-restore-error { grid-column: 1 / -1; margin: 1rem 0 0; }
+/* Use the existing preview shells, players, progress and remove controls. */
+.post-composer-grid .dz-preview { width: 100%; min-width: 0; min-height: 0; margin: 0 !important; }
+.post-composer-grid .dz-preview .dz-remove { right: auto !important; inset-inline-end: 6px !important; }
+/* Audio keeps its native, short player row without stretching across the composer. */
+.post-composer-grid .dz-preview.w-100 { grid-column: 1 / -1; max-width: 22rem; }
+.post-composer-grid .dz-preview .dz-image,
+.post-composer-grid .video-preview-item { width: 100%; height: auto; aspect-ratio: 1; }
+.post-composer-grid .dz-image img { width: 100%; height: 100%; object-fit: cover; }
+.post-composer-grid .video-preview-item .video-preview { position: absolute; inset: 0; }
+.post-composer-grid .audio-preview-item { padding: 0 2.25rem; }
+.post-composer-grid .audio-preview-item audio { display: block; }
+.post-composer-grid .audio-preview-item [data-dz-name],
+.post-composer-grid .audio-preview-item [data-dz-size] { display: none; }
+.post-composer-grid .dz-preview.w-100 .dz-remove { top: calc(50% - 12px) !important; right: auto !important; inset-inline-end: 0 !important; }
+.post-composer-grid .post-media-drag { position: absolute; top: 6px; inset-inline-start: 6px; width: 24px; height: 24px; z-index: 21; background: rgba(0, 0, 0, .56); cursor: grab; touch-action: none; user-select: none; }
+.post-composer-grid .post-media-drag:focus-visible { outline: 2px solid var(--bs-primary); outline-offset: 2px; }
+.post-composer-grid .dz-preview.w-100 .post-media-drag { top: calc(50% - 12px); inset-inline-start: 0; }
+.post-composer-grid .post-media-sort-ghost { opacity: .4; }
+.post-composer-grid .is-file-attachment { grid-column: 1 / -1; }
+.post-composer-grid .file-preview-item { min-height: 8.5rem; padding-inline: 2.5rem !important; }
+.post-composer-grid .is-file-attachment .dz-remove { top: 6px !important; }
+.post-composer-grid .file-preview-name { overflow-wrap: anywhere; }
+@media (max-width: 575.98px) {
+    .post-composer .post-composer-action, .post-composer .post-composer-setting { min-height: 2.75rem; }
+    .post-composer-toolbar { display: grid; grid-template-columns: minmax(0, 1fr); gap: .5rem; }
+    .post-composer-add-actions { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); align-items: stretch; gap: .25rem; }
+    .post-composer-add-actions > * { min-width: 0; }
+    .post-composer-add-actions .post-composer-action { width: 100%; height: 100%; min-width: 0; padding-inline: .125rem; gap: .25rem; font-size: .8125rem; white-space: normal; }
+    .post-composer-add-actions .post-composer-action > span:not(.ion-icon-wrapper) { min-width: 0; overflow-wrap: anywhere; }
+    .post-composer .post-create-button { width: 100%; min-width: 0; margin-inline-start: 0; white-space: normal; overflow-wrap: anywhere; }
+}
+@media (max-width: 359.98px) {
+    .post-composer-add-actions .post-composer-action { flex-direction: column; gap: .125rem; }
+}
+@media (pointer: coarse) {
+    .post-composer .post-composer-action, .post-composer .post-composer-setting, .post-composer-more .dropdown-item { min-height: 2.75rem; }
+    .post-composer-grid .post-media-drag::after { content: ''; position: absolute; inset: -10px; }
+}

@@ -1,0 +1,13 @@
+/* Optional custom styles */
+#broadcaster-controls button,
+#device-controls select {
+    margin-right: 5px;
+    margin-bottom: 5px;
+}
+/* Example mirror effect */
+.mirror {
+    transform: scaleX(-1);
+}
+video{
+    width: 100%;
+}

@@ -1,0 +1,15 @@
+/* Shared presentation for compact filter menus; filtering remains owned by each page. */
+.app-filter-dropdown { flex-shrink: 0; margin-inline-start: auto; }
+.app-filter-toggle { position: relative; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 2.125rem; height: 2.125rem; margin-inline-start: auto; padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer; }
+.app-filter-toggle:hover,
+.app-filter-toggle[aria-expanded="true"] { background: rgba(127,127,127,.1); }
+.app-filter-toggle.active { color: var(--primary); }
+.app-filter-toggle:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+.app-filter-count { position: absolute; top: -.25rem; inset-inline-end: -.25rem; display: inline-flex; align-items: center; justify-content: center; min-width: 1.125rem; height: 1.125rem; padding-inline: .2rem; border-radius: 999px; background: var(--primary); color: #fff; font-size: .625rem; font-weight: 700; line-height: 1; }
+/* Popper owns positioning and viewport collision handling; only style the panel here. */
+.app-filter-dropdown.dropdown .app-filter-panel { display: none; width: var(--filter-dropdown-width, 17rem); min-width: 0; max-width: calc(100vw - 1rem); max-height: min(calc(100vh - 1rem), var(--filter-dropdown-available-height, 100vh)); overflow-y: auto; overscroll-behavior: contain; padding: 1rem; margin: 0 !important; border: 1px solid rgba(127,127,127,.18); border-radius: .65rem; transition: none; cursor: default; text-align: start; }
+.app-filter-dropdown.dropdown .app-filter-panel.show { display: block; }
+.app-filter-dropdown.dropdown .app-filter-panel::before { display: none; }
+@media (pointer: coarse), (max-width: 575.98px) {
+    .app-filter-toggle { width: 2.75rem; height: 2.75rem; }
+}

@@ -1,0 +1,22 @@
+/* Fixed height posts media mode */
+.post-media img{
+    object-fit: cover; /* Do not scale the image */
+    width: 100%;
+    max-height: $heightpx;
+}
+
+.post-media video{
+    width: 100%;
+    max-height: $heightpx;
+}
+
+.posts-wrapper .locked-media{
+    max-height: $heightpx;
+}
+
+.posts-wrapper .post-media-swiper {
+    height: $heightpx!important;
+}
+.posts-wrapper .post-media-swiper>img {
+    height: $heightpx!important;
+}

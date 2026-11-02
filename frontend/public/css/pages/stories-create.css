@@ -1,0 +1,491 @@
+/* =========================================================
+   STORIES CREATE - Clean + Modern Preview
+   ========================================================= */
+
+/* -------- Left preview wrapper/stage -------- */
+
+.story-preview-wrapper {
+    min-height: 420px;
+    border-radius: 16px;
+    overflow: hidden;
+}
+
+.story-preview-stage{
+    background: #f6f7fb;
+    border-radius: 16px;
+    border: 1px solid rgba(0,0,0,0.06);
+}
+
+/* -------- 9:16 story canvas -------- */
+
+.story-canvas{
+    width: 100%;
+    max-width: 330px;
+    margin: 0 auto;
+    position: relative;
+    border-radius: 18px;
+    overflow: hidden;
+    background: #000;
+    aspect-ratio: 9 / 16;
+
+    box-shadow:
+            0 22px 50px rgba(0,0,0,0.22),
+            0 2px 10px rgba(0,0,0,0.10);
+}
+
+/* fallback for older browsers */
+.story-canvas::before{
+    content:"";
+    display:block;
+    padding-top: 177.78%;
+}
+.story-canvas > *{
+    position:absolute;
+    left:0;
+    right:0;
+}
+
+/* Override the generic "left:0; right:0" rule for the draggable text */
+#story-preview #story-preview-text{
+    left: 50%;
+    top: 50%;
+    right: auto;   /* important: cancels right:0 */
+    bottom: auto;
+}
+
+/* Media injected by JS */
+.story-canvas img,
+.story-canvas video{
+    position:absolute;
+    inset:0;
+    width:100%;
+    height:100%;
+    object-fit: cover;
+    display:block;
+}
+
+/* Empty state: tasteful gradient stage inside canvas */
+.story-canvas.is-empty{
+    background:
+            radial-gradient(circle at 25% 10%, rgba(255, 0, 128, 0.35), rgba(0,0,0,0) 55%),
+            radial-gradient(circle at 75% 90%, rgba(155, 61, 255, 0.35), rgba(0,0,0,0) 55%),
+            #0b0b10;
+}
+
+/* Gradient when there's NO uploaded media (even if overlay text exists) */
+.story-canvas.is-no-media{
+    background:
+            radial-gradient(circle at 25% 10%, rgba(255, 0, 128, 0.35), rgba(0,0,0,0) 55%),
+            radial-gradient(circle at 75% 90%, rgba(155, 61, 255, 0.35), rgba(0,0,0,0) 55%),
+            #0b0b10;
+}
+
+/* When media exists, keep the stage solid black behind it */
+.story-canvas:not(.is-no-media){
+    background: #000;
+}
+
+/* Hide the empty hint only when truly empty (no media + no text) */
+.story-canvas:not(.is-empty) .story-empty-hint{
+    display: none;
+}
+
+/* Empty hint text */
+.story-empty-hint{
+    z-index: 1;
+    top: 50%;
+    transform: translateY(-50%);
+    text-align: center;
+    padding: 18px 16px;
+    color: rgba(255,255,255,0.85);
+    pointer-events: none;
+}
+.story-empty-hint__title{
+    font-weight: 700;
+    font-size: 1rem;
+    margin-bottom: 6px;
+}
+.story-empty-hint__sub{
+    font-size: 0.82rem;
+    color: rgba(255,255,255,0.68);
+    line-height: 1.25;
+}
+
+/* -------- Top/bottom chrome -------- */
+
+.story-chrome{
+    z-index: 6;
+    padding: 10px 10px 0;
+    pointer-events: none;
+}
+
+.story-chrome--top{ top: 0; }
+.story-chrome--bottom{ bottom: 0; padding: 0 10px 10px; }
+
+/* Legibility overlays */
+.story-legibility{
+    z-index: 2;
+    pointer-events: none;
+}
+.story-legibility--top{
+    top: 0;
+    height: 120px;
+    background: linear-gradient(to bottom, rgba(0,0,0,0.55), rgba(0,0,0,0));
+}
+.story-legibility--bottom{
+    bottom: 0;
+    height: 140px;
+    background: linear-gradient(to top, rgba(0,0,0,0.55), rgba(0,0,0,0));
+}
+
+/* Progress bars */
+.story-progress{
+    display:flex;
+    gap:6px;
+    padding: 2px 0 10px;
+}
+.story-progress__seg{
+    height: 3px;
+    flex: 1;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.28);
+}
+.story-progress__seg.is-active{
+    background: rgba(255,255,255,0.85);
+}
+
+/* Header row */
+.story-header{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+}
+.story-user{
+    display:flex;
+    align-items:center;
+    gap: 8px;
+}
+.story-avatar{
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.18);
+    border: 1px solid rgba(255,255,255,0.25);
+}
+.story-user-name{
+    font-size: 0.90rem;
+    font-weight: 600;
+    color: rgba(255,255,255,0.95);
+    line-height: 1.1;
+}
+.story-user-time{
+    font-size: 0.72rem;
+    color: rgba(255,255,255,0.70);
+    line-height: 1.1;
+}
+.story-more{
+    font-weight: 700;
+    letter-spacing: 1px;
+    color: rgba(255,255,255,0.92);
+    opacity: 0.9;
+}
+
+/* -------- Text overlay layer -------- */
+
+.story-text-layer{
+    z-index: 5;
+    top: 0;
+    bottom: 0;
+
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    text-align:center;
+
+    padding: 18px;
+    color: #fff;
+
+    font-weight: 700;
+    font-size: 1.08rem;
+    line-height: 1.25;
+
+    text-shadow: 0 10px 28px rgba(0,0,0,0.45);
+    word-break: break-word;
+    pointer-events: auto;
+}
+
+/* =========================================================
+   DRAG TEXT OVERRIDES (create preview only)
+   ========================================================= */
+
+#story-preview #story-preview-text{
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+
+    width: calc(100% - 36px);
+    max-width: calc(100% - 36px);
+
+    display: block;
+    bottom: auto;
+    right: auto;
+
+    pointer-events: auto;
+}
+
+#story-preview .story-text-layer.story-text-draggable{ cursor: grab; }
+#story-preview .story-text-layer.story-text-draggable.is-dragging{ cursor: grabbing; }
+
+#story-preview #story-preview-text{
+    touch-action: none;              /* ✅ critical for pointer events on mobile */
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+/* -------- Bottom reply chrome -------- */
+
+.story-reply{
+    display:flex;
+    align-items:center;
+    gap: 8px;
+    pointer-events:none;
+}
+.story-reply-pill{
+    flex: 1;
+    height: 34px;
+    border-radius: 999px;
+    padding: 0 12px;
+    display:flex;
+    align-items:center;
+
+    color: rgba(255,255,255,0.75);
+    font-size: 0.82rem;
+
+    background: rgba(255,255,255,0.12);
+    border: 1px solid rgba(255,255,255,0.18);
+}
+.story-reply-btn{
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+
+    background: rgba(255,255,255,0.14);
+    border: 1px solid rgba(255,255,255,0.18);
+    color: rgba(255,255,255,0.9);
+}
+
+/* Meta line under preview */
+.story-preview-wrapper .card-footer{
+    padding-top: 10px;
+    padding-bottom: 12px;
+}
+
+/* -------- Right panel (controls) -------- */
+
+.story-panel{ border-radius: 16px; }
+
+.story-panel .card-body{
+    padding: 1.5rem 1.5rem 1.25rem;
+}
+
+.story-panel-label{
+    letter-spacing: 0.07em;
+    font-size: 0.72rem;
+}
+
+/* Tabs */
+.story-tabs .nav-link{
+    border-radius: 999px;
+    padding: 0.35rem 0.9rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--bs-secondary-color);
+    background-color: transparent;
+}
+
+.story-tabs .nav-link.active{
+    color: var(--theme-on-primary);
+    background: linear-gradient(90deg, var(--theme-gradient-from), var(--theme-gradient-to));
+}
+
+.story-tabs .nav-link:not(.active):hover{
+    color: var(--theme-primary-text-emphasis);
+    background-color: var(--theme-primary-bg-subtle);
+}
+
+/* Footer actions */
+.story-footer{
+    border-top: 1px solid rgba(0, 0, 0, 0.04);
+    padding-top: 1rem;
+    margin-top: 1rem;
+}
+
+/* Background color choices */
+.story-bg-choice{
+    --bs-btn-bg: var(--story-choice-color, transparent);
+    --bs-btn-hover-bg: var(--story-choice-color, transparent);
+    --bs-btn-active-bg: var(--story-choice-color, transparent);
+    --bs-btn-focus-box-shadow: none;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    padding: 0;
+    border: none;
+}
+
+.story-bg-choice--default{ background: linear-gradient(135deg, #ff0080, #9b3dff); }
+
+.story-bg-choice--black { --story-choice-color: #000; }
+.story-bg-choice--orange { --story-choice-color: #ff5722; }
+.story-bg-choice--green { --story-choice-color: #4caf50; }
+.story-bg-choice--indigo { --story-choice-color: #3f51b5; }
+
+.story-bg-choice--red    { --story-choice-color: #e53935; }
+.story-bg-choice--pink   { --story-choice-color: #ff2d8d; }
+.story-bg-choice--purple { --story-choice-color: #9b3dff; }
+.story-bg-choice--blue   { --story-choice-color: #2196f3; }
+.story-bg-choice--teal   { --story-choice-color: #00bcd4; }
+
+.story-bg-choice--yellow { --story-choice-color: #ffca28; }
+.story-bg-choice--brown  { --story-choice-color: #6d4c41; }
+
+.story-bg-choice:focus-visible{
+    outline: 2px solid var(--theme-primary);
+    outline-offset: 3px;
+}
+
+.story-bg-choice.is-active{
+    box-shadow: 0 0 0 2px var(--theme-primary);
+}
+
+/* -------- Dropzone tuning -------- */
+
+.story-upload-zone.dropzone{ min-height: auto !important; }
+
+.story-upload-zone.is-disabled {
+    align-items: center;
+    cursor: default;
+    display: flex;
+    justify-content: center;
+    min-height: 86px !important;
+    opacity: .55;
+    pointer-events: none;
+    text-align: center;
+}
+
+.story-upload-zone .upload-zone-disabled-message {
+    color: inherit;
+    font-size: .9rem;
+    font-weight: 600;
+    padding: .75rem;
+}
+
+.story-upload-zone .video-preview-item{
+    width: 120px;
+    height: 120px;
+    border-radius: 14px;
+}
+
+.story-upload-zone .video-preview-item .video-preview{
+    border-radius: 14px;
+}
+
+.story-upload-zone .video-encoding-overlay{
+    left: 8px;
+    top: 8px;
+    max-width: calc(100% - 16px);
+    min-height: 26px;
+    padding: 6px 8px;
+    font-size: 0.66rem;
+}
+
+.story-upload-zone .video-preview-placeholder{
+    padding: 12px;
+}
+
+.story-upload-zone .video-preview-placeholder-icon{
+    width: 40px;
+    height: 40px;
+    margin-bottom: 6px;
+}
+
+.story-upload-zone .video-preview-placeholder-title{
+    max-width: 90px;
+    font-size: 0.68rem;
+}
+
+.story-upload-zone .video-preview-placeholder-subtitle{
+    display: none;
+}
+
+.dropzone .dz-preview.dz-image-preview{ background: transparent !important; }
+
+.dropzone .dz-preview:hover .dz-image img{
+    -webkit-filter: blur(2px) !important;
+    filter: blur(2px) !important;
+}
+
+.dropzone .dz-preview .dz-filename{ display: none !important; }
+.dropzone .dz-preview{ min-height: unset; }
+
+/* Expand button */
+.story-preview-expand{
+    width: 34px;
+    height: 34px;
+    border-radius: 999px;
+    background: rgba(0,0,0,0.40);
+    border: 1px solid rgba(255,255,255,0.14);
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    opacity: 0.95;
+    cursor: default;
+}
+
+.story-preview-expand ion-icon{
+    font-size: 18px;
+    color: #fff;
+    pointer-events: none;
+}
+
+/* =========================================================
+   STORY BACKGROUND PRESETS
+   ========================================================= */
+
+.story-canvas.story-bg--solid_black { background: #000 !important; }
+
+.story-canvas.story-bg--grad_orange { background: linear-gradient(135deg, #ff8a00, #ff5722) !important; }
+.story-canvas.story-bg--grad_pink   { background: linear-gradient(135deg, #ff2d8d, #9b3dff) !important; }
+.story-canvas.story-bg--grad_red    { background: linear-gradient(135deg, #ff5252, #e53935) !important; }
+.story-canvas.story-bg--grad_purple { background: linear-gradient(135deg, #9b3dff, #3f51b5) !important; }
+.story-canvas.story-bg--grad_indigo { background: linear-gradient(135deg, #3f51b5, #00bcd4) !important; }
+.story-canvas.story-bg--grad_blue   { background: linear-gradient(135deg, #2196f3, #00bcd4) !important; }
+.story-canvas.story-bg--grad_teal   { background: linear-gradient(135deg, #00bcd4, #4caf50) !important; }
+.story-canvas.story-bg--grad_green  { background: linear-gradient(135deg, #4caf50, #ffca28) !important; }
+.story-canvas.story-bg--grad_yellow { background: linear-gradient(135deg, #ffca28, #ff8a00) !important; }
+.story-canvas.story-bg--grad_brown  { background: linear-gradient(135deg, #6d4c41, #e53935) !important; }
+
+.story-canvas.story-bg--grad_default{
+    background:
+            radial-gradient(circle at 25% 10%, rgba(255, 0, 128, 0.35), rgba(0,0,0,0) 55%),
+            radial-gradient(circle at 75% 90%, rgba(155, 61, 255, 0.35), rgba(0,0,0,0) 55%),
+            #0b0b10 !important;
+}
+
+.story-text-draggable{
+    cursor: grab;
+    pointer-events: auto;
+}
+.story-text-draggable.is-dragging{ cursor: grabbing; }
+
+/* Upload thumbnails must not resize shared media in the Vault picker. */
+.story-upload-zone .video-preview {
+    width: 120px !important;
+    height: 120px !important;
+}

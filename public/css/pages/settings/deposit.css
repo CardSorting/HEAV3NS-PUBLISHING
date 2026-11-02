@@ -1,0 +1,152 @@
+.deposit-theme-light {
+    --deposit-surface: var(--bs-body-bg, #fff);
+    --deposit-surface-muted: rgba(148, 163, 184, 0.04);
+    --deposit-border: rgba(15, 23, 42, 0.1);
+    --deposit-border-strong: rgba(15, 23, 42, 0.12);
+    --deposit-text: var(--bs-body-color, inherit);
+    --deposit-muted: var(--bs-secondary-color, #6b7280);
+}
+
+.deposit-theme-dark {
+    --deposit-surface: rgba(255, 255, 255, 0.02);
+    --deposit-surface-muted: rgba(255, 255, 255, 0.04);
+    --deposit-border: rgba(255, 255, 255, 0.1);
+    --deposit-border-strong: rgba(255, 255, 255, 0.16);
+    --deposit-text: var(--bs-body-color, #f3f4f6);
+    --deposit-muted: rgba(255, 255, 255, 0.7);
+}
+
+.deposit-nice-shell {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.deposit-card {
+    min-width: 0;
+    background: var(--deposit-surface);
+    border: 1px solid var(--deposit-border);
+    border-radius: 0.35rem;
+    padding: 1rem;
+}
+
+.deposit-card-title {
+    font-size: 1rem;
+    font-weight: 700;
+    margin-bottom: 0.2rem;
+    color: var(--deposit-text);
+}
+
+.deposit-card-copy {
+    margin-bottom: 0.85rem;
+    font-size: 0.9rem;
+    color: var(--deposit-muted);
+}
+
+.deposit-provider-option {
+    position: relative;
+    margin-bottom: 0 !important;
+    padding-left: 0;
+}
+
+.deposit-provider-option .form-check-input {
+    position: absolute;
+    top: 0.8rem;
+    left: 0.75rem;
+    z-index: 2;
+    float: none;
+    margin: 0;
+    border-color: var(--deposit-border-strong);
+    background-color: transparent;
+    cursor: pointer;
+}
+
+.deposit-provider-option .form-check-label {
+    min-height: 78px;
+    background: var(--deposit-surface);
+    color: var(--deposit-text);
+    cursor: pointer;
+    transition: border-color .18s ease, box-shadow .18s ease, background-color .18s ease;
+}
+
+.deposit-provider-option .form-check-input:checked ~ .form-check-label {
+    border-color: var(--theme-primary) !important;
+    box-shadow: 0 0 0 0.12rem rgba(var(--theme-primary-rgb), 0.14);
+    background-color: rgba(var(--theme-primary-rgb), 0.035);
+}
+
+.deposit-provider-option .form-check-input:checked {
+    border-color: var(--theme-primary);
+    background-color: var(--theme-primary);
+}
+
+.deposit-provider-option .form-check-input:focus {
+    border-color: var(--theme-primary);
+    box-shadow: 0 0 0 0.2rem rgba(var(--theme-primary-rgb), 0.2);
+}
+
+.deposit-provider-logo {
+    flex-basis: 42px;
+    width: 42px;
+    height: 28px;
+}
+
+.deposit-provider-logo img {
+    display: block;
+    max-width: 42px;
+    max-height: 24px;
+}
+
+.deposit-provider-logo .ion-icon-wrapper {
+    color: var(--deposit-muted);
+}
+
+.deposit-provider-copy {
+    min-width: 0;
+}
+
+.deposit-provider-summary {
+    margin-top: 0.8rem;
+    padding-top: 0.8rem;
+    border-top: 1px solid var(--deposit-border);
+    font-size: 0.88rem;
+    color: var(--deposit-muted);
+}
+
+.manual-details {
+    grid-column: 1 / -1;
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--deposit-border);
+}
+
+.manual-details h5 {
+    font-size: 1rem;
+    margin-bottom: 0.85rem;
+}
+
+.manual-method-instructions {
+    white-space: pre-line;
+}
+
+.manual-details .alert {
+    margin-bottom: 0.85rem;
+}
+
+.deposit-theme-dark .manual-details .alert {
+    background-color: rgba(59, 130, 246, 0.14);
+    border-color: rgba(59, 130, 246, 0.22);
+    color: var(--deposit-text);
+}
+
+@media (max-width: 575.98px) {
+    .deposit-card {
+        padding: 0.85rem;
+        border-radius: 0.35rem;
+    }
+
+    .deposit-provider-option .form-check-label {
+        min-height: 78px;
+    }
+}

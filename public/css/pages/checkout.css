@@ -1,0 +1,188 @@
+.rounded {
+    border-radius: 1rem
+}
+
+.nav-pills .nav-link {
+    color: #555
+}
+
+.nav-pills .nav-link.active {
+    color: white
+}
+
+input[type="radio"] {
+    margin-right: 5px
+}
+
+/* Checkout dialog: layout and typography come from Bootstrap utilities in checkout-box.blade.php, only states live here */
+
+/* Tip presets and payment rows; .active and .selected are set by checkout.js */
+.checkout-choice:hover {
+    border-color: var(--bs-primary-border-subtle) !important;
+}
+
+.checkout-choice.active,
+.checkout-choice.selected {
+    border-color: var(--bs-primary) !important;
+    background-color: var(--bs-primary-bg-subtle) !important;
+}
+
+.checkout-payment-provider {
+    min-height: 3.5rem;
+}
+
+.checkout-payment-provider.is-unavailable :is(.checkout-provider-logo, .checkout-provider-title, .available-credit) {
+    opacity: .5;
+}
+
+/* Provider logos are drawn for light backgrounds, so they sit on a white chip in both themes */
+.checkout-provider-logo {
+    width: 4.5rem;
+    height: 2rem;
+}
+
+.checkout-methods-toggle[aria-expanded="true"] .ion-icon-wrapper {
+    transform: rotate(180deg);
+}
+
+/* Sentence case pay button, unlike the theme's uppercase buttons */
+.checkout-popup .checkout-continue-btn {
+    text-transform: none;
+    letter-spacing: normal;
+}
+
+#billing-agreement-form label.error {
+    color: #ea0606!important;
+}
+
+/* === Selectize: theme-aware overrides (light + dark) === */
+
+/* Match regular billing inputs, including while the country search is active. */
+#billing-agreement-form .selectize-control.single .selectize-input,
+#billing-agreement-form .selectize-control.single .selectize-input.input-active {
+    display: flex;
+    align-items: center;
+    height: calc(1.4em + 1rem + 2px);
+    min-height: calc(1.4em + 1rem + 2px);
+    padding: .5rem .75rem;
+    padding-inline-end: 2rem;
+    font-size: 1rem;
+    line-height: 1.4;
+    border: 1px solid var(--bs-border-color);
+    border-radius: var(--ui-radius-control, .5rem);
+    box-shadow: none;
+}
+
+#billing-agreement-form .selectize-control.single .selectize-input > input {
+    font-size: inherit;
+    line-height: inherit;
+    min-width: 0;
+    max-width: 100%;
+}
+
+#billing-agreement-form .selectize-control.single .selectize-input .item {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#billing-agreement-form .selectize-control.single .selectize-input:after {
+    left: auto;
+    right: auto;
+    inset-inline-end: .75rem;
+}
+
+#billing-agreement-form .selectize-control.single .selectize-input.focus {
+    border-color: var(--theme-primary) !important;
+    box-shadow: 0 0 0 .2rem var(--theme-focus-ring) !important;
+}
+
+/* Base input */
+.selectize-control.single .selectize-input,
+.selectize-control.multi .selectize-input {
+    background-color: var(--bs-body-bg);
+    color: var(--bs-body-color);
+    border-color: var(--bs-border-color);
+}
+
+/* Text input */
+.selectize-control.single .selectize-input input,
+.selectize-control.multi .selectize-input input {
+    color: inherit;
+}
+
+/* Placeholder */
+.selectize-control.single .selectize-input input::placeholder {
+    color: var(--bs-secondary-color);
+}
+
+/* Dropdown */
+.selectize-dropdown,
+.selectize-dropdown.form-control {
+    background-color: var(--bs-body-bg);
+    color: var(--bs-body-color);
+    border-color: var(--bs-border-color);
+}
+
+/* Options */
+.selectize-dropdown .option {
+    color: inherit;
+}
+
+/* Hover / active option */
+.selectize-dropdown .option.active,
+.selectize-dropdown .option:hover {
+    background-color: var(--bs-secondary-bg);
+    color: var(--bs-body-color);
+}
+
+/* Selected value */
+.selectize-control.single .selectize-input .item {
+    color: inherit;
+}
+
+/* Caret */
+.selectize-control.single .selectize-input:after {
+    border-top-color: var(--bs-body-color);
+}
+
+/* Focus */
+.selectize-control.single .selectize-input.focus {
+    border-color: var(--bs-primary);
+    box-shadow: 0 0 0 0.2rem rgba(var(--bs-primary-rgb), 0.25);
+}
+
+/* Fix Selectize caret color (theme-aware) */
+.selectize-control.single .selectize-input:after {
+    border-top-color: var(--bs-body-color) !important;
+}
+
+/* When dropdown is open, Selectize flips the caret (uses border-bottom) */
+.selectize-control.single.dropdown-active .selectize-input:after {
+    border-bottom-color: var(--bs-body-color) !important;
+    border-top-color: transparent !important;
+}
+
+/* Theme-aware Selectize scrollbar */
+.selectize-dropdown-content::-webkit-scrollbar {
+    width: 6px;
+}
+
+.selectize-dropdown-content::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.selectize-dropdown-content::-webkit-scrollbar-thumb {
+    background-color: rgba(128, 128, 128, 0.35);
+    border-radius: 4px;
+}
+
+/* Dark theme refinement */
+[data-bs-theme="dark"] .selectize-dropdown-content::-webkit-scrollbar-thumb {
+    background-color: var(--app-scrollbar-thumb);
+}
+
+[data-bs-theme="dark"] .selectize-dropdown-content::-webkit-scrollbar-thumb:hover {
+    background-color: var(--app-scrollbar-thumb-hover);
+}

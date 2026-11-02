@@ -1,0 +1,8 @@
+{
+    "options": {
+        "autoRename": false,
+        "clean": true,
+        "greedy": false,
+        "processUrls": false
+    }
+}

@@ -1,0 +1,201 @@
+/* Shared sound selector styling for the Selectize-based sound picker. */
+
+.sound-select-theme {
+    --sound-select-input-bg: #fff;
+    --sound-select-input-border: #ced4da;
+    --sound-select-input-color: inherit;
+    --sound-select-placeholder: #6c757d;
+    --sound-select-focus-border: #80bdff;
+    --sound-select-focus-shadow: rgba(0, 123, 255, .25);
+    --sound-select-dropdown-bg: #fff;
+    --sound-select-dropdown-border: rgba(0, 0, 0, .12);
+    --sound-select-dropdown-color: inherit;
+    --sound-select-option-active-bg: rgba(0, 0, 0, .04);
+    --sound-select-artist-color: #6c757d;
+    --sound-select-play-bg: rgba(0, 0, 0, .04);
+    --sound-select-play-border: rgba(0, 0, 0, .12);
+    --sound-select-play-color: rgba(0, 0, 0, .6);
+    --sound-select-play-hover-bg: rgba(0, 0, 0, .08);
+    --sound-select-play-hover-color: rgba(0, 0, 0, .8);
+    --sound-select-play-active-bg: rgba(0, 0, 0, .14);
+    --sound-select-play-active-border: rgba(0, 0, 0, .2);
+    --sound-select-play-active-color: rgba(0, 0, 0, .9);
+}
+
+.sound-select-theme .selectize-control {
+    width: 100%;
+}
+
+.sound-select-theme .selectize-control.single .selectize-input,
+.sound-select-theme .selectize-control.single .selectize-input.input-active {
+    background-color: var(--sound-select-input-bg);
+    border: 1px solid var(--sound-select-input-border);
+    border-radius: var(--ui-radius-control, .5rem);
+    box-shadow: none;
+    color: var(--sound-select-input-color);
+    font-size: 1rem;
+    line-height: 1.5;
+    min-height: calc(1.5em + 1rem + 2px);
+    padding: .5rem .75rem;
+}
+
+.sound-select-theme .selectize-control.single .selectize-input > input {
+    color: var(--sound-select-input-color);
+    font-size: inherit;
+    line-height: inherit;
+}
+
+.sound-select-theme .selectize-control.single .selectize-input > input::placeholder {
+    color: var(--sound-select-placeholder);
+    opacity: 1;
+}
+
+.sound-select-theme .selectize-control.single .selectize-input:after {
+    right: .75rem;
+}
+
+.sound-select-theme .selectize-control.single .selectize-input.focus {
+    border-color: var(--sound-select-focus-border);
+    box-shadow: 0 0 0 .1rem var(--sound-select-focus-shadow);
+}
+
+.sound-select-theme .selectize-control.single.disabled .selectize-input {
+    background-color: #e9ecef;
+    opacity: 1;
+}
+
+.sound-select-theme .selectize-dropdown {
+    background: var(--sound-select-dropdown-bg);
+    border: 1px solid var(--sound-select-dropdown-border);
+    border-radius: .25rem;
+    box-shadow: 0 8px 22px rgba(0, 0, 0, .14);
+    color: var(--sound-select-dropdown-color);
+    overflow: hidden;
+    z-index: 20;
+}
+
+.sound-select-theme .selectize-dropdown-content {
+    -webkit-overflow-scrolling: touch;
+    max-height: 220px;
+}
+
+.sound-select-theme .selectize-dropdown .option {
+    border-radius: 8px;
+    margin: 2px 0;
+    padding: 8px 10px;
+}
+
+.sound-select-theme .selectize-dropdown .option.active {
+    background: var(--sound-select-option-active-bg) !important;
+    color: var(--sound-select-dropdown-color) !important;
+}
+
+[data-bs-theme="dark"] .sound-select-theme {
+    --sound-select-input-bg: var(--app-input-bg);
+    --sound-select-input-border: var(--app-border);
+    --sound-select-input-color: var(--app-text);
+    --sound-select-placeholder: var(--app-muted);
+    --sound-select-dropdown-bg: var(--app-surface);
+    --sound-select-dropdown-border: var(--app-border);
+    --sound-select-option-active-bg: var(--app-selectize-active-bg);
+    --sound-select-dropdown-color: var(--app-selectize-dropdown-color);
+    --sound-select-artist-color: var(--app-muted);
+    --sound-select-play-bg: var(--app-surface-raised);
+    --sound-select-play-border: var(--app-border);
+    --sound-select-play-color: var(--app-muted-strong);
+    --sound-select-play-hover-bg: var(--theme-primary-bg-subtle);
+    --sound-select-play-hover-color: var(--theme-primary-text-emphasis);
+    --sound-select-play-active-bg: var(--theme-primary-bg-subtle);
+    --sound-select-play-active-border: var(--theme-primary-border-subtle);
+    --sound-select-play-active-color: var(--theme-primary-text-emphasis);
+}
+
+.sound-select-theme .sound-opt {
+    align-items: center;
+    display: flex;
+    gap: 10px;
+    min-height: 44px;
+    padding-left: 6px;
+    padding-right: 6px;
+}
+
+.sound-select-theme .sound-opt-left,
+.sound-select-theme .sound-opt-right {
+    flex: 0 0 auto;
+}
+
+.sound-select-theme .sound-opt-cover,
+.sound-select-theme .sound-opt-cover--ph {
+    border-radius: 8px;
+    display: block;
+    height: 32px;
+    object-fit: cover;
+    width: 32px;
+}
+
+.sound-select-theme .sound-opt-cover--ph {
+    background: linear-gradient(135deg, rgba(255, 0, 128, .25), rgba(155, 61, 255, .2));
+}
+
+.sound-select-theme .sound-opt-mid {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.sound-select-theme .sound-opt-title {
+    font-weight: 600;
+    line-height: 1.1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sound-select-theme .sound-opt-artist {
+    color: var(--sound-select-artist-color);
+    font-size: 12px;
+    line-height: 1.1;
+    margin-top: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sound-select-theme .sound-opt-right {
+    align-items: center;
+    display: flex;
+    touch-action: manipulation;
+}
+
+.sound-select-theme .sound-opt-play {
+    align-items: center;
+    background: var(--sound-select-play-bg);
+    border: 1px solid var(--sound-select-play-border);
+    border-radius: 999px;
+    color: var(--sound-select-play-color);
+    cursor: pointer;
+    display: inline-flex;
+    font-size: 12px;
+    height: 26px;
+    justify-content: center;
+    line-height: 1;
+    margin: 0 !important;
+    padding: 0 !important;
+    touch-action: manipulation;
+    width: 26px;
+}
+
+.sound-select-theme .sound-opt-play:hover {
+    background: var(--sound-select-play-hover-bg);
+    color: var(--sound-select-play-hover-color);
+}
+
+.sound-select-theme .sound-opt-play.is-playing {
+    background: var(--sound-select-play-active-bg);
+    border-color: var(--sound-select-play-active-border);
+    color: var(--sound-select-play-active-color);
+}
+
+.sound-select-theme .sound-opt-play:focus {
+    box-shadow: none;
+    outline: none;
+}

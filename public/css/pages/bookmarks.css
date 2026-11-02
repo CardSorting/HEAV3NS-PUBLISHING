@@ -1,0 +1,9 @@
+.notifications-nav{
+    flex-wrap:nowrap;
+}
+
+@media (max-width: 767px) {
+    .settings-content {
+        border:none!important;
+    }
+}

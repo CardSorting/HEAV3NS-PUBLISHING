@@ -1,0 +1,43 @@
+// Bootstrap owns visibility and Popper/static positioning. Keep product sizing
+// and the optional desktop hover menu without overriding ordinary dropdowns.
+.dropdown-menu { box-shadow: $dropdown-box-shadow; }
+.dropdown-item { transition: background-color $dropdown-transition-time, color $dropdown-transition-time; }
+.dropdown-toggle::after { transition: $dropdown-toggle-arrow-transition; }
+.dropdown-toggle.show::after { transform: $dropdown-toggle-arrow-transform; }
+.dropdown-menu li { position: relative; }
+.dropdown-image { background-size: cover; }
+
+@include media-breakpoint-up(lg) {
+    .dropdown-xl { min-width: $dropdown-xl-min-width; }
+    .dropdown-lg { min-width: $dropdown-lg-min-width; }
+    .dropdown-md { min-width: $dropdown-md-min-width; }
+
+    @media (hover: hover) {
+        .dropdown-hover > .dropdown-menu:not(.show) {
+            display: block;
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+            top: 100%;
+            transform: $dropdown-transform;
+            transition: $dropdown-transition;
+        }
+        .dropdown-hover:hover > .dropdown-menu,
+        .dropdown-hover:focus-within > .dropdown-menu {
+            opacity: 1;
+            visibility: visible;
+            pointer-events: auto;
+            transform: $dropdown-transform-show;
+        }
+    }
+}
+
+@include app-breakpoint-down(xl) {
+    .dropdown-lg-responsive { min-width: $dropdown-lg-width-responsive; }
+}
+
+.dropdown-subitem > .dropdown-menu {
+    inset-inline-start: 100%;
+    inset-inline-end: auto;
+    top: 0;
+}
