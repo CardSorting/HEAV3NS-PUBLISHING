@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [2.1.0] - 2026-11-02
+
+### Added
+- **Model Context Protocol (MCP 2024-11-05) Server ([`backend/src/mcp.rs`](./backend/src/mcp.rs))**: Added a full JSON-RPC 2.0 MCP server at `POST /api/mcp`, discovery manifest at `GET /api/mcp/manifest`, and direct REST tool bridge at `POST /api/mcp/tools/:tool_name` exposing **26 autonomous tools**, **4 resources**, and **3 workflow prompts**.
+- **Scoped Autonomous Agent Tokens & Spend Guardrails (`agent_tokens` & `agent_audit_logs`)**: Added HMAC-SHA256 hashed `hp_mcp_*` agent tokens (`X-Agent-Token` / `Bearer hp_mcp_*`) with capability scopes (`read`, `write`, `engage`, `monetize`, `messages`, `wallet`) and hardware-grade per-transaction (`max_spend_per_tx`) and 24-hour rolling (`daily_spend_limit`) spend caps.
+- **Autonomous AI Agents & MCP Control Center UI ([`/my/agents`](./frontend/src/app/my/agents/page.tsx))**: Added a dedicated frontend workspace for minting/revoking scoped agent keys, visualizing 24-hour spend progress bars, executing MCP tools in an interactive JSON-RPC/REST console, and inspecting the real-time `agent_audit_logs` ledger.
+- **Creator Analytics & Broadcast DM Endpoints**: Added `GET /api/analytics/overview` (85/15 net revenue breakdown + agent telemetry) and `POST /api/messenger/broadcast` (mass subscriber/follower DM campaigns).
+
+---
+
 ## [2.0.0] - 2026-11-02
 
 ### Added

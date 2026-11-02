@@ -1,7 +1,10 @@
 use rusqlite::{params, Connection};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use crate::models::{Attachment, PollAnswerView, PollView, PostCommentView, PostView, UserPublicProfile};
+use crate::models::{
+    Attachment, CreatorOfferView, PollAnswerView, PollView, PostCommentView, PostView,
+    UserPublicProfile,
+};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -358,6 +361,46 @@ pub fn init_db(db_path: &str) -> Result<Connection, rusqlite::Error> {
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             UNIQUE(story_id, viewer_user_id)
         );
+
+        CREATE TABLE IF NOT EXISTS creator_offers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+            old_profile_access_price REAL NOT NULL DEFAULT 15.0,
+            old_profile_access_price_3_months REAL NOT NULL DEFAULT 12.0,
+            old_profile_access_price_6_months REAL NOT NULL DEFAULT 10.0,
+            old_profile_access_price_12_months REAL NOT NULL DEFAULT 8.0,
+            discount_percent INTEGER NOT NULL DEFAULT 25,
+            expires_at TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS agent_tokens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            token_prefix TEXT NOT NULL,
+            token_hash TEXT NOT NULL UNIQUE,
+            scopes TEXT NOT NULL DEFAULT '["read","write","engage","monetize","messages","wallet"]',
+            max_spend_per_tx REAL NOT NULL DEFAULT 50.0,
+            daily_spend_limit REAL NOT NULL DEFAULT 200.0,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            last_used_at TEXT,
+            expires_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS agent_audit_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            agent_token_id INTEGER REFERENCES agent_tokens(id) ON DELETE SET NULL,
+            tool_name TEXT NOT NULL,
+            resource_type TEXT NOT NULL DEFAULT 'account',
+            resource_id TEXT,
+            status TEXT NOT NULL DEFAULT 'success',
+            amount_spent REAL NOT NULL DEFAULT 0.0,
+            details TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
         "#,
     )?;
 
@@ -660,6 +703,13 @@ fn seed_db(conn: &Connection) -> Result<(), rusqlite::Error> {
         [],
     )?;
 
+    // Seed Promotional Creator Offer for Aria
+    conn.execute(
+        "INSERT INTO creator_offers (user_id, old_profile_access_price, old_profile_access_price_3_months, old_profile_access_price_6_months, old_profile_access_price_12_months, discount_percent, expires_at)
+         VALUES (1, 19.99, 15.99, 13.99, 10.99, 25, datetime('now', '+7 days'))",
+        [],
+    )?;
+
     Ok(())
 }
 
@@ -796,6 +846,29 @@ pub fn get_user_public_profile(
             false
         };
 
+        let creator_offer: Option<CreatorOfferView> = conn
+            .query_row(
+                "SELECT id, user_id, old_profile_access_price, old_profile_access_price_3_months,
+                        old_profile_access_price_6_months, old_profile_access_price_12_months,
+                        discount_percent, expires_at, created_at
+                 FROM creator_offers WHERE user_id = ?1 AND expires_at >= datetime('now')",
+                params![uid],
+                |orow| {
+                    Ok(CreatorOfferView {
+                        id: orow.get(0)?,
+                        user_id: orow.get(1)?,
+                        old_profile_access_price: orow.get(2)?,
+                        old_profile_access_price_3_months: orow.get(3)?,
+                        old_profile_access_price_6_months: orow.get(4)?,
+                        old_profile_access_price_12_months: orow.get(5)?,
+                        discount_percent: orow.get(6)?,
+                        expires_at: orow.get(7)?,
+                        created_at: orow.get(8)?,
+                    })
+                },
+            )
+            .ok();
+
         Ok(UserPublicProfile {
             id: uid,
             name: row.get(1)?,
@@ -837,6 +910,7 @@ pub fn get_user_public_profile(
             postcode: if is_owner_or_admin { row.get(30)? } else { None },
             referral_code: row.get(22)?,
             created_at: row.get(23)?,
+            creator_offer,
         })
     })
 }

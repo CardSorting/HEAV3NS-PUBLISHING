@@ -1,3 +1,41 @@
+export interface CreatorOffer {
+  discount_percent: number;
+  old_profile_access_price: number;
+  old_profile_access_price_3_months: number;
+  old_profile_access_price_6_months: number;
+  old_profile_access_price_12_months: number;
+  expires_at: string;
+}
+
+export interface AgentTokenItem {
+  id: number;
+  user_id: number;
+  name: string;
+  token_prefix: string;
+  scopes: string[];
+  max_spend_per_tx: number;
+  daily_spend_limit: number;
+  spent_last_24h: number;
+  is_active: boolean;
+  last_used_at?: string | null;
+  expires_at?: string | null;
+  created_at: string;
+}
+
+export interface AgentAuditLogItem {
+  id: number;
+  user_id: number;
+  agent_token_id?: number | null;
+  agent_name?: string | null;
+  tool_name: string;
+  resource_type: string;
+  resource_id?: string | null;
+  status: string;
+  amount_spent: number;
+  details: string;
+  created_at: string;
+}
+
 export interface UserProfile {
   id: number;
   name: string;
@@ -31,6 +69,7 @@ export interface UserProfile {
   is_blocked?: boolean;
   wallet_balance: number;
   referral_code: string;
+  creator_offer?: CreatorOffer | null;
   created_at: string;
 }
 

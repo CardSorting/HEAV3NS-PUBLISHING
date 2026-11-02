@@ -35,13 +35,17 @@ function SettingsContent() {
   const [avatar, setAvatar] = useState('');
   const [cover, setCover] = useState('');
 
-  // Rates
+  // Rates & Promotional Offer
   const [paidProfile, setPaidProfile] = useState(true);
   const [openProfile, setOpenProfile] = useState(false);
   const [price1, setPrice1] = useState('14.99');
   const [price3, setPrice3] = useState('11.99');
   const [price6, setPrice6] = useState('9.99');
   const [price12, setPrice12] = useState('7.99');
+  const [offerDiscountPercent, setOfferDiscountPercent] = useState('25');
+  const [offerExpiresAt, setOfferExpiresAt] = useState('');
+  const [agentTokens, setAgentTokens] = useState<any[]>([]);
+  const [agentAuditLogs, setAgentAuditLogs] = useState<any[]>([]);
 
   // Wallet
   const [depositAmount, setDepositAmount] = useState('50');
@@ -76,6 +80,8 @@ function SettingsContent() {
       setWithdrawals(res.withdrawals || []);
       setReferrals(res.referrals || []);
       setVerification(res.verification || null);
+      setAgentTokens(res.agent_tokens || []);
+      setAgentAuditLogs(res.agent_audit_logs || []);
 
       setName(p.name);
       setUsername(p.username);
@@ -93,6 +99,12 @@ function SettingsContent() {
       setPrice3(String(p.profile_access_price_3_months));
       setPrice6(String(p.profile_access_price_6_months));
       setPrice12(String(p.profile_access_price_12_months));
+      if (p.creator_offer) {
+        setOfferDiscountPercent(String(p.creator_offer.discount_percent));
+        setOfferExpiresAt(p.creator_offer.expires_at.slice(0, 16).replace(' ', 'T'));
+      } else {
+        setOfferExpiresAt('');
+      }
 
       setEmail(p.email);
       if (res.billing) {
@@ -218,6 +230,8 @@ function SettingsContent() {
           profile_access_price_3_months: parseFloat(price3) || 0,
           profile_access_price_6_months: parseFloat(price6) || 0,
           profile_access_price_12_months: parseFloat(price12) || 0,
+          offer_discount_percent: parseInt(offerDiscountPercent, 10) || 25,
+          offer_expires_at: offerExpiresAt || null,
         }),
       });
       setStatusMessage(res.message);
@@ -340,7 +354,7 @@ function SettingsContent() {
 
   const tabs = [
     { key: 'profile', label: '👤 Edit Profile' },
-    { key: 'rates', label: '💲 Creator Rates' },
+    { key: 'rates', label: '💲 Creator Rates & Offers' },
     { key: 'wallet', label: '👛 Wallet & Withdrawals' },
     { key: 'subscriptions', label: '💎 Subscriptions' },
     { key: 'payments', label: '🧾 Payments & Invoices' },
@@ -348,6 +362,7 @@ function SettingsContent() {
     { key: 'account', label: '🔒 Account & Billing' },
     { key: 'privacy', label: '🛡️ Privacy & 2FA' },
     { key: 'referrals', label: '🎁 Referrals' },
+    { key: 'agents', label: '🤖 AI Agents & MCP' },
   ];
 
   return (
@@ -515,9 +530,9 @@ function SettingsContent() {
 
         {activeTab === 'rates' && (
           <form onSubmit={handleSaveRates} className="d-grid gap-3" style={{ maxWidth: 620 }}>
-            <h4 className="fw-bold mb-1">Creator Subscription Rates</h4>
+            <h4 className="fw-bold mb-1">Creator Subscription Rates &amp; Promotional Offers</h4>
             <p className="small text-muted mb-2">
-              Configure your monthly subscription pricing and multi-month promotional bundles.
+              Configure your monthly subscription pricing, multi-month bundles, and limited-time promotional discount campaigns.
             </p>
             <div className="form-check form-switch">
               <input
@@ -586,13 +601,42 @@ function SettingsContent() {
                 />
               </div>
             </div>
+
+            <div className="p-3 rounded-4 border bg-body-tertiary mt-2">
+              <div className="fw-bold small mb-2">🔥 Limited-Time Promotional Discount Campaign</div>
+              <div className="row g-3">
+                <div className="col-md-5">
+                  <label className="form-label small fw-semibold">Discount % (5% – 90%)</label>
+                  <input
+                    type="number"
+                    min="5"
+                    max="90"
+                    value={offerDiscountPercent}
+                    onChange={(e) => setOfferDiscountPercent(e.target.value)}
+                    className="form-control rounded-pill px-3"
+                  />
+                </div>
+                <div className="col-md-7">
+                  <label className="form-label small fw-semibold">
+                    Offer Expiration (leave empty to clear offer)
+                  </label>
+                  <input
+                    type="datetime-local"
+                    value={offerExpiresAt}
+                    onChange={(e) => setOfferExpiresAt(e.target.value)}
+                    className="form-control rounded-pill px-3"
+                  />
+                </div>
+              </div>
+            </div>
+
             <div>
               <button
                 type="submit"
                 disabled={busy}
                 className="btn btn-primary rounded-pill px-5 fw-bold"
               >
-                Save Subscription Rates
+                Save Subscription Rates &amp; Offer
               </button>
             </div>
           </form>
@@ -1155,6 +1199,94 @@ function SettingsContent() {
                     <span className="badge bg-success-subtle text-success rounded-pill">
                       +${Number(r.bonus_amount || 5).toFixed(2)} Bonus
                     </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'agents' && (
+          <div style={{ maxWidth: 740 }}>
+            <div className="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+              <div>
+                <h4 className="fw-bold mb-1">🤖 Autonomous AI Agents &amp; MCP Access</h4>
+                <p className="text-muted small mb-0">
+                  Manage scoped <code>hp_mcp_*</code> keys, per-transaction &amp; 24h rolling spend guardrails, and inspect autonomous actions.
+                </p>
+              </div>
+              <Link
+                href="/my/agents"
+                className="btn btn-primary rounded-pill px-4 fw-bold"
+              >
+                Open Full MCP Control Center →
+              </Link>
+            </div>
+
+            <div className="row g-3 mb-4">
+              <div className="col-sm-4">
+                <div className="p-3 rounded-4 border bg-body-tertiary">
+                  <div className="small text-muted">Active Agent Keys</div>
+                  <div className="fs-4 fw-bold">
+                    {agentTokens.filter((t) => t.is_active).length}
+                  </div>
+                </div>
+              </div>
+              <div className="col-sm-4">
+                <div className="p-3 rounded-4 border bg-body-tertiary">
+                  <div className="small text-muted">24h Agent Spend</div>
+                  <div className="fs-4 fw-bold">
+                    $
+                    {agentTokens
+                      .reduce((s, t) => s + Number(t.spent_last_24h || 0), 0)
+                      .toFixed(2)}
+                  </div>
+                </div>
+              </div>
+              <div className="col-sm-4">
+                <div className="p-3 rounded-4 border bg-body-tertiary">
+                  <div className="small text-muted">Audit Events</div>
+                  <div className="fs-4 fw-bold">{agentAuditLogs.length}</div>
+                </div>
+              </div>
+            </div>
+
+            <h6 className="fw-bold mb-2">Issued Agent Keys ({agentTokens.length})</h6>
+            {agentTokens.length === 0 ? (
+              <div className="p-3 rounded-4 border text-muted small mb-4">
+                No agent tokens minted yet. Visit the{' '}
+                <Link href="/my/agents">Autonomous Agent &amp; MCP Control Center</Link> to mint a scoped key or run MCP tools interactively.
+              </div>
+            ) : (
+              <div className="list-group rounded-4 overflow-hidden mb-4">
+                {agentTokens.map((t) => (
+                  <div
+                    key={t.id}
+                    className="list-group-item d-flex flex-wrap justify-content-between align-items-center gap-2"
+                  >
+                    <div>
+                      <div className="fw-bold small">
+                        {t.name}{' '}
+                        <span
+                          className={`badge rounded-pill ${
+                            t.is_active ? 'bg-success' : 'bg-secondary'
+                          }`}
+                        >
+                          {t.is_active ? 'Active' : 'Revoked'}
+                        </span>
+                      </div>
+                      <div className="text-muted" style={{ fontSize: 12 }}>
+                        <code>{t.token_prefix}</code> · Scopes: {(t.scopes || []).join(', ')} · Caps: $
+                        {Number(t.max_spend_per_tx || 0).toFixed(2)}/tx, $
+                        {Number(t.daily_spend_limit || 0).toFixed(2)}/24h
+                      </div>
+                    </div>
+                    <Link
+                      href="/my/agents?view=keys"
+                      className="btn btn-sm btn-outline-primary rounded-pill"
+                    >
+                      Manage
+                    </Link>
                   </div>
                 ))}
               </div>

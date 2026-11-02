@@ -1,0 +1,2821 @@
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    response::IntoResponse,
+    Json,
+};
+use rusqlite::params;
+use serde::Deserialize;
+use serde_json::{json, Value};
+use uuid::Uuid;
+
+use crate::{
+    auth::{create_jwt, hash_agent_token, AppError, AuthUser, OptionalAuthUser},
+    db::{build_post_view, get_user_public_profile, is_blocked_between, round_money, AppState},
+    handlers::{
+        list_user_agent_audit_logs, list_user_agent_tokens, normalize_db_datetime,
+    },
+    models::*,
+};
+
+#[derive(Deserialize)]
+pub struct JsonRpcRequest {
+    pub jsonrpc: Option<String>,
+    pub id: Option<Value>,
+    pub method: String,
+    pub params: Option<Value>,
+}
+
+/// Returns the complete MCP Tool Catalog (30+ tools) for autonomous account creation and operation.
+pub fn get_mcp_tools_catalog() -> Vec<Value> {
+    vec![
+        // 1. Autonomous Account Registration & Authentication
+        json!({
+            "name": "account_register",
+            "category": "Identity & Auth",
+            "scope": "public",
+            "description": "Autonomously register a new creator or fan account, provision a $100.00 starter wallet, and optionally issue an immediate MCP Agent Token (hp_mcp_*) for ongoing autonomous operation.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["name", "email", "password"],
+                "properties": {
+                    "name": { "type": "string", "description": "Display name" },
+                    "username": { "type": "string", "description": "Unique handle (optional, derived from email if omitted)" },
+                    "email": { "type": "string", "description": "Account email address" },
+                    "password": { "type": "string", "description": "Account password (min 6 chars)" },
+                    "referral_code": { "type": "string", "description": "Optional creator referral code for +$5.00 signup bonus" },
+                    "issue_agent_token": { "type": "boolean", "description": "If true (default), automatically provisions an hp_mcp_* agent token" },
+                    "agent_name": { "type": "string", "description": "Name for the provisioned MCP agent token" }
+                }
+            }
+        }),
+        json!({
+            "name": "account_login",
+            "category": "Identity & Auth",
+            "scope": "public",
+            "description": "Authenticate an existing account with email/username and password, returning a JWT and optional scoped MCP Agent Token.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["email", "password"],
+                "properties": {
+                    "email": { "type": "string", "description": "Email or username" },
+                    "password": { "type": "string", "description": "Account password" },
+                    "issue_agent_token": { "type": "boolean", "description": "If true, creates and returns a fresh hp_mcp_* token" },
+                    "agent_name": { "type": "string", "description": "Label for the issued agent token" }
+                }
+            }
+        }),
+        json!({
+            "name": "account_whoami",
+            "category": "Identity & Auth",
+            "scope": "read",
+            "description": "Inspect the currently authenticated account profile, wallet balance, unread notifications, unread messages, and active agent token scopes/guardrails.",
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
+        json!({
+            "name": "agent_token_create",
+            "category": "Identity & Auth",
+            "scope": "admin",
+            "description": "Provision a new scoped MCP Agent Token (hp_mcp_*) with granular scopes and per-tx / 24h spend caps.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["name"],
+                "properties": {
+                    "name": { "type": "string", "description": "Agent key name (e.g., 'Claude Autonomous Studio Agent')" },
+                    "scopes": { "type": "array", "items": { "type": "string" }, "description": "Scopes: read, write, engage, monetize, messages, wallet, admin" },
+                    "max_spend_per_tx": { "type": "number", "description": "Maximum USD spend per single transaction (default 50.0)" },
+                    "daily_spend_limit": { "type": "number", "description": "Maximum USD spend per rolling 24h window (default 200.0)" }
+                }
+            }
+        }),
+        json!({
+            "name": "agent_token_list",
+            "category": "Identity & Auth",
+            "scope": "read",
+            "description": "List all MCP Agent Tokens and recent autonomous audit log entries for the account.",
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
+        json!({
+            "name": "agent_token_revoke",
+            "category": "Identity & Auth",
+            "scope": "admin",
+            "description": "Immediately revoke an MCP Agent Token by ID.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["token_id"],
+                "properties": { "token_id": { "type": "integer" } }
+            }
+        }),
+        // 2. Profile, Creator Rates, Promotional Offers & KYC
+        json!({
+            "name": "profile_update",
+            "category": "Profile & Rates",
+            "scope": "write",
+            "description": "Update public creator profile metadata (display name, username, bio, location, website, pronouns, birthdate, avatar, cover).",
+            "inputSchema": {
+                "type": "object",
+                "required": ["name", "username"],
+                "properties": {
+                    "name": { "type": "string" },
+                    "username": { "type": "string" },
+                    "bio": { "type": "string" },
+                    "location": { "type": "string" },
+                    "website": { "type": "string" },
+                    "gender_pronoun": { "type": "string" },
+                    "birthdate": { "type": "string" },
+                    "avatar": { "type": "string" },
+                    "cover": { "type": "string" }
+                }
+            }
+        }),
+        json!({
+            "name": "rates_and_offers_update",
+            "category": "Profile & Rates",
+            "scope": "monetize",
+            "description": "Configure creator subscription rates (1m, 3m, 6m, 12m), paid/open profile mode, and optional promotional discount campaign.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["paid_profile", "open_profile", "profile_access_price"],
+                "properties": {
+                    "paid_profile": { "type": "boolean" },
+                    "open_profile": { "type": "boolean" },
+                    "profile_access_price": { "type": "number" },
+                    "profile_access_price_3_months": { "type": "number" },
+                    "profile_access_price_6_months": { "type": "number" },
+                    "profile_access_price_12_months": { "type": "number" },
+                    "offer_discount_percent": { "type": "integer", "description": "Promotional discount percentage (5-90)" },
+                    "offer_expires_at": { "type": "string", "description": "ISO datetime when promo expires" }
+                }
+            }
+        }),
+        json!({
+            "name": "privacy_update",
+            "category": "Profile & Rates",
+            "scope": "write",
+            "description": "Update account privacy flags (public_profile, enable_2fa, enable_geoblocking).",
+            "inputSchema": {
+                "type": "object",
+                "required": ["public_profile", "enable_2fa", "enable_geoblocking"],
+                "properties": {
+                    "public_profile": { "type": "boolean" },
+                    "enable_2fa": { "type": "boolean" },
+                    "enable_geoblocking": { "type": "boolean" }
+                }
+            }
+        }),
+        json!({
+            "name": "kyc_verification_submit",
+            "category": "Profile & Rates",
+            "scope": "write",
+            "description": "Submit creator identity verification document URLs for KYC review.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["files"],
+                "properties": {
+                    "files": { "type": "array", "items": { "type": "string" } }
+                }
+            }
+        }),
+        // 3. Content Publishing (Posts, Polls, Reels, Stories, Streams, AI Copywriting)
+        json!({
+            "name": "post_create_or_update",
+            "category": "Publishing",
+            "scope": "write",
+            "description": "Create or edit a post with optional PPV price, pinned flag, scheduled release_date, expire_date, media attachments, and interactive poll options.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["text"],
+                "properties": {
+                    "id": { "type": "integer", "description": "Optional post ID to update" },
+                    "text": { "type": "string" },
+                    "price": { "type": "number", "description": "PPV unlock price ($0 for free/subscriber post)" },
+                    "is_pinned": { "type": "boolean" },
+                    "release_date": { "type": "string", "description": "Optional schedule date (YYYY-MM-DD HH:MM:SS)" },
+                    "expire_date": { "type": "string", "description": "Optional expiration date" },
+                    "attachments": { "type": "array", "items": { "type": "string" } },
+                    "poll_answers": { "type": "array", "items": { "type": "string" } }
+                }
+            }
+        }),
+        json!({
+            "name": "post_delete",
+            "category": "Publishing",
+            "scope": "write",
+            "description": "Delete a post owned by the authenticated user.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["post_id"],
+                "properties": { "post_id": { "type": "integer" } }
+            }
+        }),
+        json!({
+            "name": "reel_create",
+            "category": "Publishing",
+            "scope": "write",
+            "description": "Publish a vertical short-form video Reel with optional PPV unlock price.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["caption"],
+                "properties": {
+                    "caption": { "type": "string" },
+                    "video_url": { "type": "string" },
+                    "cover_url": { "type": "string" },
+                    "price": { "type": "number" }
+                }
+            }
+        }),
+        json!({
+            "name": "story_create",
+            "category": "Publishing",
+            "scope": "write",
+            "description": "Publish a 24h ephemeral Story or permanent Profile Highlight.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["caption"],
+                "properties": {
+                    "caption": { "type": "string" },
+                    "media_url": { "type": "string" },
+                    "bg_preset": { "type": "string" },
+                    "is_highlight": { "type": "boolean" }
+                }
+            }
+        }),
+        json!({
+            "name": "stream_start",
+            "category": "Publishing",
+            "scope": "write",
+            "description": "Start an HLS Live Stream and provision RTMP ingest credentials.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["name"],
+                "properties": {
+                    "name": { "type": "string" },
+                    "price": { "type": "number" },
+                    "requires_subscription": { "type": "boolean" },
+                    "is_public": { "type": "boolean" }
+                }
+            }
+        }),
+        json!({
+            "name": "stream_stop",
+            "category": "Publishing",
+            "scope": "write",
+            "description": "End an active live stream.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["stream_id"],
+                "properties": { "stream_id": { "type": "integer" } }
+            }
+        }),
+        json!({
+            "name": "ai_caption_suggest",
+            "category": "Publishing",
+            "scope": "read",
+            "description": "Generate high-converting creator post/reel copy for a given topic.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "topic": { "type": "string" } }
+            }
+        }),
+        // 4. Media Vault Management
+        json!({
+            "name": "vault_list",
+            "category": "Media Vault",
+            "scope": "read",
+            "description": "List all media files in the user's Media Vault.",
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
+        json!({
+            "name": "vault_register_asset",
+            "category": "Media Vault",
+            "scope": "write",
+            "description": "Register a media asset URL in the user's Media Vault for attachment to posts or messages.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["file_url"],
+                "properties": {
+                    "filename": { "type": "string" },
+                    "file_url": { "type": "string" },
+                    "file_type": { "type": "string", "description": "image, video, or audio" }
+                }
+            }
+        }),
+        json!({
+            "name": "vault_toggle_archive",
+            "category": "Media Vault",
+            "scope": "write",
+            "description": "Archive or unarchive a Media Vault attachment.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["attachment_id"],
+                "properties": { "attachment_id": { "type": "string" } }
+            }
+        }),
+        // 5. Discovery, Feed & Social Engagement
+        json!({
+            "name": "feed_read",
+            "category": "Discovery & Engagement",
+            "scope": "read",
+            "description": "Read the personalized feed with filter ('all', 'subscribed', 'media', 'photos', 'videos').",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "page": { "type": "integer" },
+                    "filter": { "type": "string" }
+                }
+            }
+        }),
+        json!({
+            "name": "creator_discover",
+            "category": "Discovery & Engagement",
+            "scope": "read",
+            "description": "Search creators, posts, and live streams across the platform.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" },
+                    "filter": { "type": "string" }
+                }
+            }
+        }),
+        json!({
+            "name": "profile_get",
+            "category": "Discovery & Engagement",
+            "scope": "read",
+            "description": "Fetch a creator's public profile, posts, reels, stories, streams, and active promotional offer.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["username"],
+                "properties": { "username": { "type": "string" } }
+            }
+        }),
+        json!({
+            "name": "post_react",
+            "category": "Discovery & Engagement",
+            "scope": "engage",
+            "description": "Toggle a like reaction on a post, comment, or reel.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "post_id": { "type": "integer" },
+                    "comment_id": { "type": "integer" },
+                    "reel_id": { "type": "integer" }
+                }
+            }
+        }),
+        json!({
+            "name": "post_comment",
+            "category": "Discovery & Engagement",
+            "scope": "engage",
+            "description": "Add a comment to an unlocked post.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["post_id", "message"],
+                "properties": {
+                    "post_id": { "type": "integer" },
+                    "message": { "type": "string" }
+                }
+            }
+        }),
+        json!({
+            "name": "poll_vote",
+            "category": "Discovery & Engagement",
+            "scope": "engage",
+            "description": "Vote in a post poll.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["poll_id", "answer_id"],
+                "properties": {
+                    "poll_id": { "type": "integer" },
+                    "answer_id": { "type": "integer" }
+                }
+            }
+        }),
+        json!({
+            "name": "social_follow_or_block",
+            "category": "Discovery & Engagement",
+            "scope": "engage",
+            "description": "Follow/unfollow or block/unblock a target user.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["target_user_id", "action"],
+                "properties": {
+                    "target_user_id": { "type": "integer" },
+                    "action": { "type": "string", "description": "'follow' or 'block'" }
+                }
+            }
+        }),
+        // 6. Direct & Broadcast Messaging
+        json!({
+            "name": "messenger_contacts_and_thread",
+            "category": "Messaging",
+            "scope": "messages",
+            "description": "List messenger contacts or fetch conversation messages with a specific user_id.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "other_user_id": { "type": "integer", "description": "If provided, loads conversation thread with this user" }
+                }
+            }
+        }),
+        json!({
+            "name": "messenger_send_dm",
+            "category": "Messaging",
+            "scope": "messages",
+            "description": "Send a 1-on-1 direct message or paid PPV locked message.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["receiver_id", "message"],
+                "properties": {
+                    "receiver_id": { "type": "integer" },
+                    "message": { "type": "string" },
+                    "price": { "type": "number" },
+                    "attachments": { "type": "array", "items": { "type": "string" } }
+                }
+            }
+        }),
+        json!({
+            "name": "messenger_broadcast",
+            "category": "Messaging",
+            "scope": "messages",
+            "description": "Send a mass broadcast message (free or PPV) to all active subscribers, followers, or a custom list.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["message"],
+                "properties": {
+                    "target": { "type": "string", "description": "'subscribers' or 'followers'" },
+                    "list_id": { "type": "integer" },
+                    "recipient_ids": { "type": "array", "items": { "type": "integer" } },
+                    "message": { "type": "string" },
+                    "price": { "type": "number" },
+                    "attachments": { "type": "array", "items": { "type": "string" } }
+                }
+            }
+        }),
+        // 7. Wallet, Subscriptions, PPV Unlocks, Tips & Withdrawals
+        json!({
+            "name": "wallet_transact",
+            "category": "Wallet & Monetization",
+            "scope": "wallet",
+            "description": "Execute a financial transaction (deposit, subscription, tip, post-unlock, message-unlock, reel-unlock, stream-unlock) with automatic spend-cap enforcement.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["payment_type"],
+                "properties": {
+                    "payment_type": { "type": "string", "description": "deposit, subscription, tip, post-unlock, message-unlock, reel-unlock, stream-unlock" },
+                    "recipient_user_id": { "type": "integer" },
+                    "post_id": { "type": "integer" },
+                    "message_id": { "type": "integer" },
+                    "reel_id": { "type": "integer" },
+                    "stream_id": { "type": "integer" },
+                    "amount": { "type": "number" },
+                    "months": { "type": "integer", "description": "1, 3, 6, or 12 for subscription" },
+                    "provider": { "type": "string", "description": "wallet/credit, stripe, paypal, crypto" }
+                }
+            }
+        }),
+        json!({
+            "name": "wallet_withdraw",
+            "category": "Wallet & Monetization",
+            "scope": "wallet",
+            "description": "Request a creator payout withdrawal (min $20.00) with immediate wallet escrow.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["amount"],
+                "properties": {
+                    "amount": { "type": "number" },
+                    "payment_method": { "type": "string" },
+                    "payment_identifier": { "type": "string" }
+                }
+            }
+        }),
+        // 8. Analytics & Notifications
+        json!({
+            "name": "analytics_and_notifications",
+            "category": "Telemetry & Analytics",
+            "scope": "read",
+            "description": "Fetch comprehensive creator revenue breakdown (85/15 net split, subscriptions, PPV, tips), engagement metrics, notifications, and autonomous agent audit logs.",
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
+    ]
+}
+
+pub fn get_mcp_resources_catalog() -> Vec<Value> {
+    vec![
+        json!({
+            "uri": "heav3ns://account/profile",
+            "name": "Authenticated Account Profile & Wallet",
+            "description": "Current user profile, subscription pricing, active promotional offer, and wallet balance.",
+            "mimeType": "application/json"
+        }),
+        json!({
+            "uri": "heav3ns://account/analytics",
+            "name": "Creator Revenue & Engagement Analytics",
+            "description": "Real-time 85/15 creator earnings breakdown, subscriber counts, and engagement telemetry.",
+            "mimeType": "application/json"
+        }),
+        json!({
+            "uri": "heav3ns://account/audit-logs",
+            "name": "Autonomous Agent Audit Trail",
+            "description": "Immutable log of all MCP tool calls, resource mutations, and wallet spend executed by agents.",
+            "mimeType": "application/json"
+        }),
+        json!({
+            "uri": "heav3ns://platform/featured-creators",
+            "name": "Featured Platform Creators",
+            "description": "Public directory of featured creators and subscription offers.",
+            "mimeType": "application/json"
+        }),
+    ]
+}
+
+pub fn get_mcp_prompts_catalog() -> Vec<Value> {
+    vec![
+        json!({
+            "name": "autonomous_creator_onboarding",
+            "description": "End-to-end workflow for an AI agent to register a creator account, configure bio & subscription tiers, launch a promotional offer, and publish a pinned welcome post with a poll.",
+            "arguments": [
+                { "name": "persona_name", "description": "Creator display name", "required": true },
+                { "name": "niche", "description": "Content niche (e.g. digital art, fitness, music)", "required": true }
+            ]
+        }),
+        json!({
+            "name": "autonomous_daily_growth_and_engagement",
+            "description": "Daily autonomous loop: check analytics & notifications, publish a scheduled post or PPV reel, reply to fan comments, and broadcast a VIP offer to subscribers.",
+            "arguments": [
+                { "name": "daily_budget_usd", "description": "Max spend budget for the session", "required": false }
+            ]
+        }),
+        json!({
+            "name": "autonomous_fan_curator",
+            "description": "Discover creators in a target niche, subscribe or unlock top PPV posts within spend guardrails, and vote on creator polls.",
+            "arguments": [
+                { "name": "interest_query", "description": "Search topic or creator handle", "required": true }
+            ]
+        }),
+    ]
+}
+
+/// GET /api/mcp/manifest — Public discovery manifest for MCP clients & autonomous agents
+pub async fn get_mcp_manifest() -> impl IntoResponse {
+    Json(json!({
+        "success": true,
+        "protocol": "model-context-protocol",
+        "protocolVersion": "2024-11-05",
+        "serverInfo": {
+            "name": "heav3ns-publishing-mcp-server",
+            "version": "2.1.0",
+            "vendor": "HEAV3NS-Publishing",
+            "description": "Model Context Protocol (MCP) Server for autonomous AI agents to create, monetize, and operate creator & fan accounts end-to-end."
+        },
+        "endpoints": {
+            "jsonrpc": "/api/mcp",
+            "manifest": "/api/mcp/manifest",
+            "rest_tool_call": "/api/mcp/tools/:tool_name",
+            "agent_tokens": "/api/agent/tokens",
+            "creator_analytics": "/api/analytics/overview"
+        },
+        "authentication": {
+            "headers": [
+                "Authorization: Bearer <hp_mcp_token_or_jwt>",
+                "X-Agent-Token: <hp_mcp_token>"
+            ],
+            "self_provisioning_tools": ["account_register", "account_login"],
+            "scopes": ["read", "write", "engage", "monetize", "messages", "wallet", "admin"]
+        },
+        "tools": get_mcp_tools_catalog(),
+        "resources": get_mcp_resources_catalog(),
+        "prompts": get_mcp_prompts_catalog()
+    }))
+}
+
+/// POST /api/mcp/tools/:tool_name — Direct REST bridge for calling any MCP tool
+pub async fn call_mcp_tool_rest(
+    State(state): State<AppState>,
+    OptionalAuthUser(auth): OptionalAuthUser,
+    Path(tool_name): Path<String>,
+    Json(args): Json<Option<Value>>,
+) -> Result<impl IntoResponse, AppError> {
+    let arguments = args.unwrap_or_else(|| json!({}));
+    let result = execute_mcp_tool(&state, auth.as_ref(), &tool_name, &arguments)?;
+    Ok(Json(json!({
+        "success": true,
+        "tool": tool_name,
+        "result": result
+    })))
+}
+
+/// POST /api/mcp — Standard JSON-RPC 2.0 Model Context Protocol endpoint
+pub async fn handle_mcp_rpc(
+    State(state): State<AppState>,
+    OptionalAuthUser(auth): OptionalAuthUser,
+    Json(req): Json<JsonRpcRequest>,
+) -> impl IntoResponse {
+    let rpc_id = req.id.clone().unwrap_or(Value::Null);
+    let params = req.params.unwrap_or_else(|| json!({}));
+
+    let outcome: Result<Value, AppError> = match req.method.as_str() {
+        "initialize" => Ok(json!({
+            "protocolVersion": "2024-11-05",
+            "capabilities": {
+                "tools": { "listChanged": false },
+                "resources": { "subscribe": false, "listChanged": false },
+                "prompts": { "listChanged": false }
+            },
+            "serverInfo": {
+                "name": "heav3ns-publishing-mcp-server",
+                "version": "2.1.0"
+            }
+        })),
+        "notifications/initialized" | "ping" => Ok(json!({ "status": "ok" })),
+        "tools/list" => Ok(json!({
+            "tools": get_mcp_tools_catalog()
+        })),
+        "resources/list" => Ok(json!({
+            "resources": get_mcp_resources_catalog()
+        })),
+        "resources/read" => {
+            let uri = params
+                .get("uri")
+                .and_then(|v| v.as_str())
+                .unwrap_or("heav3ns://account/profile");
+            read_mcp_resource(&state, auth.as_ref(), uri).map(|contents| {
+                json!({
+                    "contents": [{
+                        "uri": uri,
+                        "mimeType": "application/json",
+                        "text": serde_json::to_string_pretty(&contents).unwrap_or_default()
+                    }]
+                })
+            })
+        }
+        "prompts/list" => Ok(json!({
+            "prompts": get_mcp_prompts_catalog()
+        })),
+        "prompts/get" => {
+            let name = params
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("autonomous_creator_onboarding");
+            let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
+            Ok(build_mcp_prompt(name, &args))
+        }
+        "tools/call" => {
+            let tool_name = params
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let arguments = params
+                .get("arguments")
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+            match execute_mcp_tool(&state, auth.as_ref(), tool_name, &arguments) {
+                Ok(val) => Ok(json!({
+                    "content": [{
+                        "type": "text",
+                        "text": serde_json::to_string_pretty(&val).unwrap_or_default()
+                    }],
+                    "structuredContent": val,
+                    "isError": false
+                })),
+                Err(err) => {
+                    let msg = match &err {
+                        AppError::BadRequest(m)
+                        | AppError::Unauthorized(m)
+                        | AppError::Forbidden(m)
+                        | AppError::NotFound(m)
+                        | AppError::Unprocessable(m)
+                        | AppError::Internal(m) => m.clone(),
+                    };
+                    Ok(json!({
+                        "content": [{
+                            "type": "text",
+                            "text": format!("Error executing tool '{tool_name}': {msg}")
+                        }],
+                        "structuredContent": {
+                            "success": false,
+                            "error": msg
+                        },
+                        "isError": true
+                    }))
+                }
+            }
+        }
+        other => Err(AppError::BadRequest(format!(
+            "Unsupported MCP JSON-RPC method: {other}"
+        ))),
+    };
+
+    match outcome {
+        Ok(result) => (
+            StatusCode::OK,
+            Json(json!({
+                "jsonrpc": "2.0",
+                "id": rpc_id,
+                "result": result
+            })),
+        ),
+        Err(err) => {
+            let (code, msg) = match err {
+                AppError::Unauthorized(m) => (-32001, m),
+                AppError::Forbidden(m) => (-32003, m),
+                AppError::NotFound(m) => (-32004, m),
+                AppError::Unprocessable(m) => (-32602, m),
+                AppError::BadRequest(m) => (-32601, m),
+                AppError::Internal(m) => (-32603, m),
+            };
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "jsonrpc": "2.0",
+                    "id": rpc_id,
+                    "error": {
+                        "code": code,
+                        "message": msg
+                    }
+                })),
+            )
+        }
+    }
+}
+
+fn read_mcp_resource(
+    state: &AppState,
+    auth: Option<&AuthUser>,
+    uri: &str,
+) -> Result<Value, AppError> {
+    let conn = state.lock_db();
+    match uri {
+        "heav3ns://platform/featured-creators" => {
+            let mut stmt = conn.prepare("SELECT id FROM users WHERE public_profile = 1 ORDER BY id ASC LIMIT 9")?;
+            let ids: Vec<i64> = stmt
+                .query_map([], |r| r.get(0))?
+                .filter_map(Result::ok)
+                .collect();
+            let viewer_id = auth.map(|a| a.user_id);
+            let mut profiles = Vec::new();
+            for id in ids {
+                if let Ok(p) = get_user_public_profile(&conn, id, viewer_id) {
+                    profiles.push(p);
+                }
+            }
+            Ok(json!({ "featured_creators": profiles }))
+        }
+        "heav3ns://account/profile" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            user.require_scope("read")?;
+            let profile = get_user_public_profile(&conn, user.user_id, Some(user.user_id))?;
+            Ok(json!({ "profile": profile }))
+        }
+        "heav3ns://account/audit-logs" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            user.require_scope("read")?;
+            let logs = list_user_agent_audit_logs(&conn, user.user_id, 50)?;
+            Ok(json!({ "audit_logs": logs }))
+        }
+        "heav3ns://account/analytics" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            user.require_scope("read")?;
+            drop(conn);
+            execute_mcp_tool(state, auth, "analytics_and_notifications", &json!({}))
+        }
+        other => Err(AppError::NotFound(format!("Unknown MCP resource URI: {other}"))),
+    }
+}
+
+fn build_mcp_prompt(name: &str, args: &Value) -> Value {
+    let persona = args
+        .get("persona_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Nova Synth");
+    let niche = args
+        .get("niche")
+        .or_else(|| args.get("interest_query"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("digital art & behind-the-scenes studio production");
+
+    let text = match name {
+        "autonomous_creator_onboarding" => format!(
+            "You are operating an autonomous creator account for {persona} in the {niche} niche on HEAV3NS-Publishing.\n\
+             Step 1: Call `account_register` (or `account_whoami` if already authenticated) to provision your account and `hp_mcp_*` agent token.\n\
+             Step 2: Call `profile_update` to set a compelling creator bio, location, website, and avatar.\n\
+             Step 3: Call `rates_and_offers_update` to configure 1/3/6/12-month subscription bundles and an introductory promotional discount.\n\
+             Step 4: Call `post_create_or_update` to publish a pinned welcome post with an interactive fan poll."
+        ),
+        "autonomous_daily_growth_and_engagement" => {
+            "Execute the daily autonomous creator growth loop:\n\
+             1. Call `analytics_and_notifications` to inspect revenue (85/15 split), new subscribers, and unread comments.\n\
+             2. Call `ai_caption_suggest` and `post_create_or_update` (or `reel_create`) to publish fresh content.\n\
+             3. Call `messenger_broadcast` to notify active subscribers of new exclusive drops."
+                .to_string()
+        }
+        _ => format!(
+            "Execute autonomous fan curation for '{niche}':\n\
+             1. Call `creator_discover` with query='{niche}'.\n\
+             2. Inspect creator profiles with `profile_get`.\n\
+             3. Use `wallet_transact` within your configured spend guardrails to subscribe or unlock PPV posts, and engage via `post_react`, `post_comment`, and `poll_vote`."
+        ),
+    };
+
+    json!({
+        "description": format!("MCP workflow prompt: {name}"),
+        "messages": [{
+            "role": "user",
+            "content": {
+                "type": "text",
+                "text": text
+            }
+        }]
+    })
+}
+
+fn record_audit(
+    conn: &rusqlite::Connection,
+    auth: &AuthUser,
+    tool_name: &str,
+    resource_type: &str,
+    resource_id: Option<String>,
+    amount_spent: f64,
+    details: Value,
+) {
+    let _ = conn.execute(
+        "INSERT INTO agent_audit_logs (user_id, agent_token_id, tool_name, resource_type, resource_id, status, amount_spent, details)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'success', ?6, ?7)",
+        params![
+            auth.user_id,
+            auth.agent_token_id,
+            tool_name,
+            resource_type,
+            resource_id,
+            round_money(amount_spent),
+            details.to_string()
+        ],
+    );
+}
+
+fn provision_agent_token_internal(
+    conn: &rusqlite::Connection,
+    user_id: i64,
+    agent_name: &str,
+    scopes: &[String],
+    max_tx: f64,
+    daily_lim: f64,
+) -> Result<(i64, String), AppError> {
+    let raw_secret = format!("hp_mcp_{}_{}", user_id, Uuid::new_v4().simple());
+    let prefix = format!("{}...", &raw_secret[..14.min(raw_secret.len())]);
+    let token_hash = hash_agent_token(&raw_secret);
+    let scopes_json = serde_json::to_string(scopes).unwrap_or_else(|_| "[]".into());
+
+    conn.execute(
+        "INSERT INTO agent_tokens (user_id, name, token_prefix, token_hash, scopes, max_spend_per_tx, daily_spend_limit, is_active)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1)",
+        params![user_id, agent_name, prefix, token_hash, scopes_json, max_tx, daily_lim],
+    )?;
+    Ok((conn.last_insert_rowid(), raw_secret))
+}
+
+pub fn execute_mcp_tool(
+    state: &AppState,
+    auth: Option<&AuthUser>,
+    tool_name: &str,
+    args: &Value,
+) -> Result<Value, AppError> {
+    match tool_name {
+        "account_register" => {
+            let name = args
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            let email = args
+                .get("email")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_lowercase();
+            let password = args
+                .get("password")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+
+            if name.is_empty() || email.is_empty() || password.len() < 6 {
+                return Err(AppError::Unprocessable(
+                    "name, valid email, and password (min 6 chars) are required.".into(),
+                ));
+            }
+
+            let raw_username = args
+                .get("username")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_lowercase())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| {
+                    email
+                        .split('@')
+                        .next()
+                        .unwrap_or("agent")
+                        .chars()
+                        .filter(|c| c.is_alphanumeric() || *c == '_')
+                        .collect()
+                });
+            let username = if raw_username.is_empty() {
+                format!("agent_{}", &Uuid::new_v4().simple().to_string()[..6])
+            } else {
+                raw_username
+            };
+
+            let mut conn = state.lock_db();
+            let exists: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM users WHERE email = ?1 OR username = ?2",
+                params![email, username],
+                |r| r.get(0),
+            )?;
+            if exists > 0 {
+                return Err(AppError::Unprocessable(
+                    "An account with that email or username already exists.".into(),
+                ));
+            }
+
+            let password_hash = bcrypt::hash(password, 4)
+                .map_err(|_| AppError::Internal("Password hash error".into()))?;
+            let referral_code = format!(
+                "{}{}",
+                username.chars().take(4).collect::<String>().to_uppercase(),
+                &Uuid::new_v4().simple().to_string()[..4].to_uppercase()
+            );
+
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            tx.execute(
+                "INSERT INTO users (name, username, email, password_hash, role_id, email_verified_at, referral_code)
+                 VALUES (?1, ?2, ?3, ?4, 2, datetime('now'), ?5)",
+                params![name, username, email, password_hash, referral_code],
+            )?;
+            let user_id = tx.last_insert_rowid();
+            tx.execute(
+                "INSERT INTO wallets (user_id, total) VALUES (?1, 100.0)",
+                params![user_id],
+            )?;
+
+            if let Some(ref_code) = args.get("referral_code").and_then(|v| v.as_str()) {
+                let clean_ref = ref_code.trim();
+                if !clean_ref.is_empty() {
+                    if let Ok(referrer_id) = tx.query_row::<i64, _, _>(
+                        "SELECT id FROM users WHERE UPPER(referral_code) = UPPER(?1) AND id != ?2",
+                        params![clean_ref, user_id],
+                        |r| r.get(0),
+                    ) {
+                        tx.execute(
+                            "UPDATE wallets SET total = ROUND(total + 5.0, 2) WHERE user_id = ?1",
+                            params![referrer_id],
+                        )?;
+                        tx.execute(
+                            "UPDATE wallets SET total = ROUND(total + 5.0, 2) WHERE user_id = ?1",
+                            params![user_id],
+                        )?;
+                        let _ = tx.execute(
+                            "INSERT INTO referrals (referrer_user_id, referred_user_id, referral_code, bonus_amount)
+                             VALUES (?1, ?2, ?3, 5.0)",
+                            params![referrer_id, user_id, clean_ref.to_uppercase()],
+                        );
+                    }
+                }
+            }
+
+            for (lname, ltype) in [
+                ("Followers", "followers"),
+                ("Following", "following"),
+                ("Blocked", "blocked"),
+            ] {
+                tx.execute(
+                    "INSERT INTO user_lists (user_id, name, list_type) VALUES (?1, ?2, ?3)",
+                    params![user_id, lname, ltype],
+                )?;
+            }
+            tx.commit()?;
+
+            let jwt_token = create_jwt(user_id, &username, 2)?;
+            let issue_agent = args
+                .get("issue_agent_token")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            let mut agent_token_secret: Option<String> = None;
+            if issue_agent {
+                let agent_name = args
+                    .get("agent_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Primary Autonomous Agent");
+                let max_tx = round_money(
+                    args.get("max_spend_per_tx")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(50.0)
+                        .max(0.0),
+                );
+                let daily_lim = round_money(
+                    args.get("daily_spend_limit")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(200.0)
+                        .max(0.0),
+                );
+                let scopes = vec![
+                    "read".into(),
+                    "write".into(),
+                    "engage".into(),
+                    "monetize".into(),
+                    "messages".into(),
+                    "wallet".into(),
+                ];
+                let (tid, secret) = provision_agent_token_internal(
+                    &conn, user_id, agent_name, &scopes, max_tx, daily_lim,
+                )?;
+                let _ = conn.execute(
+                    "INSERT INTO agent_audit_logs (user_id, agent_token_id, tool_name, resource_type, resource_id, status, amount_spent, details)
+                     VALUES (?1, ?2, 'account_register', 'user', ?3, 'success', 0.0, ?4)",
+                    params![
+                        user_id,
+                        tid,
+                        user_id.to_string(),
+                        json!({ "username": username, "agent_name": agent_name }).to_string()
+                    ],
+                );
+                agent_token_secret = Some(secret);
+            }
+
+            let profile = get_user_public_profile(&conn, user_id, Some(user_id))?;
+            Ok(json!({
+                "success": true,
+                "user": profile,
+                "jwt_token": jwt_token,
+                "agent_token": agent_token_secret
+            }))
+        }
+
+        "account_login" => {
+            let identifier = args
+                .get("email")
+                .or_else(|| args.get("username"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            let password = args
+                .get("password")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            let conn = state.lock_db();
+            let (user_id, username, password_hash, role_id): (i64, String, String, i64) = conn
+                .query_row(
+                    "SELECT id, username, password_hash, role_id FROM users WHERE email = ?1 OR username = ?1",
+                    params![identifier],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                )
+                .map_err(|_| AppError::Unauthorized("Invalid credentials".into()))?;
+
+            if !bcrypt::verify(password, &password_hash).unwrap_or(false) {
+                return Err(AppError::Unauthorized("Invalid credentials".into()));
+            }
+            let jwt_token = create_jwt(user_id, &username, role_id)?;
+            let mut agent_token_secret: Option<String> = None;
+            if args
+                .get("issue_agent_token")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                let agent_name = args
+                    .get("agent_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Autonomous Session Agent");
+                let max_tx = round_money(
+                    args.get("max_spend_per_tx")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(50.0)
+                        .max(0.0),
+                );
+                let daily_lim = round_money(
+                    args.get("daily_spend_limit")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(200.0)
+                        .max(0.0),
+                );
+                let scopes = vec![
+                    "read".into(),
+                    "write".into(),
+                    "engage".into(),
+                    "monetize".into(),
+                    "messages".into(),
+                    "wallet".into(),
+                ];
+                let (_, secret) = provision_agent_token_internal(
+                    &conn, user_id, agent_name, &scopes, max_tx, daily_lim,
+                )?;
+                agent_token_secret = Some(secret);
+            }
+            let profile = get_user_public_profile(&conn, user_id, Some(user_id))?;
+            Ok(json!({
+                "success": true,
+                "user": profile,
+                "jwt_token": jwt_token,
+                "agent_token": agent_token_secret
+            }))
+        }
+
+        "account_whoami" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            user.require_scope("read")?;
+            let conn = state.lock_db();
+            let profile = get_user_public_profile(&conn, user.user_id, Some(user.user_id))?;
+            let unread_notifications: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM notifications WHERE to_user_id = ?1 AND is_read = 0",
+                    params![user.user_id],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            let unread_messages: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM user_messages WHERE receiver_id = ?1 AND is_seen = 0",
+                    params![user.user_id],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            record_audit(&conn, user, "account_whoami", "user", Some(user.user_id.to_string()), 0.0, json!({}));
+            Ok(json!({
+                "user": profile,
+                "unread_notifications": unread_notifications,
+                "unread_messages": unread_messages,
+                "auth_mode": if user.agent_token_id.is_some() { "mcp_agent_token" } else { "jwt" },
+                "agent_token_id": user.agent_token_id,
+                "scopes": user.agent_scopes,
+                "max_spend_per_tx": user.max_spend_per_tx,
+                "daily_spend_limit": user.daily_spend_limit
+            }))
+        }
+
+        "agent_token_create" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            if user.agent_token_id.is_some() {
+                user.require_scope("admin")?;
+            }
+            let name = args
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Autonomous Agent")
+                .trim();
+            if name.is_empty() {
+                return Err(AppError::Unprocessable("Agent token name required".into()));
+            }
+            let scopes: Vec<String> = args
+                .get("scopes")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_else(|| {
+                    vec![
+                        "read".into(),
+                        "write".into(),
+                        "engage".into(),
+                        "monetize".into(),
+                        "messages".into(),
+                        "wallet".into(),
+                    ]
+                });
+            let max_tx = round_money(
+                args.get("max_spend_per_tx")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(50.0)
+                    .max(0.0),
+            );
+            let daily_lim = round_money(
+                args.get("daily_spend_limit")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(200.0)
+                    .max(0.0),
+            );
+            let conn = state.lock_db();
+            let (tid, secret) =
+                provision_agent_token_internal(&conn, user.user_id, name, &scopes, max_tx, daily_lim)?;
+            record_audit(
+                &conn,
+                user,
+                "agent_token_create",
+                "agent_token",
+                Some(tid.to_string()),
+                0.0,
+                json!({ "name": name, "scopes": scopes }),
+            );
+            Ok(json!({
+                "token_id": tid,
+                "agent_token": secret,
+                "scopes": scopes,
+                "max_spend_per_tx": max_tx,
+                "daily_spend_limit": daily_lim
+            }))
+        }
+
+        "agent_token_list" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            user.require_scope("read")?;
+            let conn = state.lock_db();
+            let tokens = list_user_agent_tokens(&conn, user.user_id)?;
+            let logs = list_user_agent_audit_logs(&conn, user.user_id, 50)?;
+            Ok(json!({
+                "agent_tokens": tokens,
+                "agent_audit_logs": logs
+            }))
+        }
+
+        "agent_token_revoke" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            if user.agent_token_id.is_some() {
+                user.require_scope("admin")?;
+            }
+            let tid = args
+                .get("token_id")
+                .and_then(|v| v.as_i64())
+                .ok_or_else(|| AppError::BadRequest("token_id required".into()))?;
+            let conn = state.lock_db();
+            let updated = conn.execute(
+                "UPDATE agent_tokens SET is_active = 0 WHERE id = ?1 AND (user_id = ?2 OR ?3 = 1)",
+                params![tid, user.user_id, user.role_id],
+            )?;
+            if updated == 0 {
+                return Err(AppError::NotFound("Agent token not found".into()));
+            }
+            record_audit(&conn, user, "agent_token_revoke", "agent_token", Some(tid.to_string()), 0.0, json!({}));
+            Ok(json!({ "revoked": true, "token_id": tid }))
+        }
+
+        "profile_update" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            user.require_scope("write")?;
+            let conn = state.lock_db();
+            let current = get_user_public_profile(&conn, user.user_id, Some(user.user_id))?;
+            let name = args
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&current.name)
+                .trim();
+            let username = args
+                .get("username")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&current.username)
+                .trim()
+                .chars()
+                .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+                .collect::<String>()
+                .to_lowercase();
+            if name.is_empty() || username.is_empty() {
+                return Err(AppError::Unprocessable("Name and valid username are required".into()));
+            }
+            let taken: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM users WHERE username = ?1 AND id != ?2",
+                params![username, user.user_id],
+                |r| r.get(0),
+            )?;
+            if taken > 0 {
+                return Err(AppError::Unprocessable("Username already taken".into()));
+            }
+            let bio = args.get("bio").and_then(|v| v.as_str()).unwrap_or(&current.bio);
+            let location = args
+                .get("location")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&current.location);
+            let website = args
+                .get("website")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&current.website);
+            let pronoun = args
+                .get("gender_pronoun")
+                .and_then(|v| v.as_str())
+                .or(current.gender_pronoun.as_deref());
+            let birthdate = args
+                .get("birthdate")
+                .and_then(|v| v.as_str())
+                .or(current.birthdate.as_deref());
+            let avatar = args.get("avatar").and_then(|v| v.as_str());
+            let cover = args.get("cover").and_then(|v| v.as_str());
+
+            conn.execute(
+                "UPDATE users SET
+                    name = ?1, username = ?2, bio = ?3, location = ?4, website = ?5,
+                    birthdate = ?6, gender_pronoun = ?7,
+                    avatar = COALESCE(?8, avatar), cover = COALESCE(?9, cover)
+                 WHERE id = ?10",
+                params![
+                    name,
+                    username,
+                    bio.trim(),
+                    location.trim(),
+                    website.trim(),
+                    birthdate,
+                    pronoun,
+                    avatar,
+                    cover,
+                    user.user_id
+                ],
+            )?;
+            record_audit(
+                &conn,
+                user,
+                "profile_update",
+                "user",
+                Some(user.user_id.to_string()),
+                0.0,
+                json!({ "name": name, "username": username }),
+            );
+            let updated = get_user_public_profile(&conn, user.user_id, Some(user.user_id))?;
+            Ok(json!({ "user": updated }))
+        }
+
+        "rates_and_offers_update" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            user.require_scope("monetize")?;
+            let conn = state.lock_db();
+            let cur = get_user_public_profile(&conn, user.user_id, Some(user.user_id))?;
+            let paid_profile = args
+                .get("paid_profile")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(cur.paid_profile);
+            let open_profile = args
+                .get("open_profile")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(cur.open_profile);
+            let p1 = round_money(
+                args.get("profile_access_price")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(cur.profile_access_price)
+                    .max(0.0),
+            );
+            let p3 = round_money(
+                args.get("profile_access_price_3_months")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(cur.profile_access_price_3_months)
+                    .max(0.0),
+            );
+            let p6 = round_money(
+                args.get("profile_access_price_6_months")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(cur.profile_access_price_6_months)
+                    .max(0.0),
+            );
+            let p12 = round_money(
+                args.get("profile_access_price_12_months")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(cur.profile_access_price_12_months)
+                    .max(0.0),
+            );
+
+            conn.execute(
+                "UPDATE users SET
+                    paid_profile = ?1, open_profile = ?2,
+                    profile_access_price = ?3, profile_access_price_3_months = ?4,
+                    profile_access_price_6_months = ?5, profile_access_price_12_months = ?6
+                 WHERE id = ?7",
+                params![
+                    if paid_profile { 1 } else { 0 },
+                    if open_profile { 1 } else { 0 },
+                    p1,
+                    p3,
+                    p6,
+                    p12,
+                    user.user_id
+                ],
+            )?;
+
+            if let Some(exp) = normalize_db_datetime(
+                args.get("offer_expires_at")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+            ) {
+                let disc = args
+                    .get("offer_discount_percent")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(25)
+                    .clamp(5, 90);
+                conn.execute(
+                    "INSERT INTO creator_offers (user_id, old_profile_access_price, old_profile_access_price_3_months, old_profile_access_price_6_months, old_profile_access_price_12_months, discount_percent, expires_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                     ON CONFLICT(user_id) DO UPDATE SET
+                        old_profile_access_price = excluded.old_profile_access_price,
+                        old_profile_access_price_3_months = excluded.old_profile_access_price_3_months,
+                        old_profile_access_price_6_months = excluded.old_profile_access_price_6_months,
+                        old_profile_access_price_12_months = excluded.old_profile_access_price_12_months,
+                        discount_percent = excluded.discount_percent,
+                        expires_at = excluded.expires_at",
+                    params![
+                        user.user_id,
+                        cur.profile_access_price.max(p1),
+                        cur.profile_access_price_3_months.max(p3),
+                        cur.profile_access_price_6_months.max(p6),
+                        cur.profile_access_price_12_months.max(p12),
+                        disc,
+                        exp
+                    ],
+                )?;
+            }
+
+            record_audit(
+                &conn,
+                user,
+                "rates_and_offers_update",
+                "user",
+                Some(user.user_id.to_string()),
+                0.0,
+                json!({ "price_1m": p1, "paid_profile": paid_profile }),
+            );
+            let updated = get_user_public_profile(&conn, user.user_id, Some(user.user_id))?;
+            Ok(json!({ "user": updated }))
+        }
+
+        "privacy_update" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            user.require_scope("write")?;
+            let conn = state.lock_db();
+            let pub_prof = args
+                .get("public_profile")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            let two_fa = args
+                .get("enable_2fa")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let geo = args
+                .get("enable_geoblocking")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            conn.execute(
+                "UPDATE users SET public_profile = ?1, enable_2fa = ?2, enable_geoblocking = ?3 WHERE id = ?4",
+                params![
+                    if pub_prof { 1 } else { 0 },
+                    if two_fa { 1 } else { 0 },
+                    if geo { 1 } else { 0 },
+                    user.user_id
+                ],
+            )?;
+            record_audit(&conn, user, "privacy_update", "user", Some(user.user_id.to_string()), 0.0, args.clone());
+            Ok(json!({ "updated": true }))
+        }
+
+        "kyc_verification_submit" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            user.require_scope("write")?;
+            let files: Vec<String> = args
+                .get("files")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|x| x.as_str().map(|s| s.trim().to_string()))
+                        .filter(|s| !s.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default();
+            if files.is_empty() {
+                return Err(AppError::Unprocessable("At least one document file URL required".into()));
+            }
+            let conn = state.lock_db();
+            conn.execute(
+                "INSERT INTO user_verifies (user_id, status, files, rejection_reason)
+                 VALUES (?1, 'pending', ?2, NULL)
+                 ON CONFLICT(user_id) DO UPDATE SET status = 'pending', files = excluded.files, rejection_reason = NULL",
+                params![user.user_id, serde_json::to_string(&files).unwrap_or_default()],
+            )?;
+            record_audit(&conn, user, "kyc_verification_submit", "verification", Some(user.user_id.to_string()), 0.0, json!({ "files": files }));
+            Ok(json!({ "status": "pending", "files": files }))
+        }
+
+        "post_create_or_update" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            user.require_scope("write")?;
+            let text = args
+                .get("text")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            let attachments: Vec<String> = args
+                .get("attachments")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if text.is_empty() && attachments.is_empty() {
+                return Err(AppError::Unprocessable(
+                    "Post must contain text or at least one attachment.".into(),
+                ));
+            }
+            let price = round_money(
+                args.get("price")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0)
+                    .max(0.0),
+            );
+            let is_pinned = if args.get("is_pinned").and_then(|v| v.as_bool()).unwrap_or(false) {
+                1
+            } else {
+                0
+            };
+            let release_date = normalize_db_datetime(
+                args.get("release_date")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+            );
+            let expire_date = normalize_db_datetime(
+                args.get("expire_date")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+            );
+            let conn = state.lock_db();
+            let post_id = if let Some(existing_id) = args.get("id").and_then(|v| v.as_i64()) {
+                let owner_id: i64 = conn.query_row(
+                    "SELECT user_id FROM posts WHERE id = ?1",
+                    params![existing_id],
+                    |r| r.get(0),
+                )?;
+                if owner_id != user.user_id && user.role_id != 1 {
+                    return Err(AppError::Forbidden("You do not own this post".into()));
+                }
+                conn.execute(
+                    "UPDATE posts SET text = ?1, price = ?2, is_pinned = ?3, release_date = ?4, expire_date = ?5 WHERE id = ?6",
+                    params![text, price, is_pinned, release_date, expire_date, existing_id],
+                )?;
+                existing_id
+            } else {
+                conn.execute(
+                    "INSERT INTO posts (user_id, text, price, status, is_pinned, release_date, expire_date)
+                     VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6)",
+                    params![user.user_id, text, price, is_pinned, release_date, expire_date],
+                )?;
+                conn.last_insert_rowid()
+            };
+
+            for item in attachments {
+                let updated = conn.execute(
+                    "UPDATE attachments SET post_id = ?1 WHERE (id = ?2 OR file_url = ?2) AND user_id = ?3",
+                    params![post_id, item, user.user_id],
+                )?;
+                if updated == 0 && (item.starts_with('/') || item.starts_with("http")) {
+                    let ftype = if item.ends_with(".mp4") || item.ends_with(".webm") {
+                        "video"
+                    } else {
+                        "image"
+                    };
+                    conn.execute(
+                        "INSERT INTO attachments (id, user_id, post_id, filename, file_url, file_type, file_size)
+                         VALUES (?1, ?2, ?3, 'agent-media', ?4, ?5, 1024)",
+                        params![Uuid::new_v4().to_string(), user.user_id, post_id, item, ftype],
+                    )?;
+                }
+            }
+
+            if let Some(poll_arr) = args.get("poll_answers").and_then(|v| v.as_array()) {
+                let clean: Vec<String> = poll_arr
+                    .iter()
+                    .filter_map(|x| x.as_str().map(|s| s.trim().to_string()))
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if clean.len() >= 2 {
+                    conn.execute("DELETE FROM polls WHERE post_id = ?1", params![post_id])?;
+                    conn.execute(
+                        "INSERT INTO polls (user_id, post_id) VALUES (?1, ?2)",
+                        params![user.user_id, post_id],
+                    )?;
+                    let poll_id = conn.last_insert_rowid();
+                    for ans in clean {
+                        conn.execute(
+                            "INSERT INTO poll_answers (poll_id, answer) VALUES (?1, ?2)",
+                            params![poll_id, ans],
+                        )?;
+                    }
+                }
+            }
+
+            record_audit(
+                &conn,
+                user,
+                "post_create_or_update",
+                "post",
+                Some(post_id.to_string()),
+                0.0,
+                json!({ "post_id": post_id, "price": price }),
+            );
+            let pv = build_post_view(&conn, post_id, Some(user.user_id))?;
+            Ok(json!({ "post": pv }))
+        }
+
+        "post_delete" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            user.require_scope("write")?;
+            let pid = args
+                .get("post_id")
+                .and_then(|v| v.as_i64())
+                .ok_or_else(|| AppError::BadRequest("post_id required".into()))?;
+            let conn = state.lock_db();
+            let owner_id: i64 = conn.query_row(
+                "SELECT user_id FROM posts WHERE id = ?1",
+                params![pid],
+                |r| r.get(0),
+            )?;
+            if owner_id != user.user_id && user.role_id != 1 {
+                return Err(AppError::Forbidden("Not authorized to delete this post".into()));
+            }
+            conn.execute("DELETE FROM posts WHERE id = ?1", params![pid])?;
+            record_audit(&conn, user, "post_delete", "post", Some(pid.to_string()), 0.0, json!({}));
+            Ok(json!({ "deleted": true, "post_id": pid }))
+        }
+
+        "reel_create" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            user.require_scope("write")?;
+            let caption = args
+                .get("caption")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            let video_url = args
+                .get("video_url")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or("/img/video-loading-spinner.mp4");
+            let cover_url = args
+                .get("cover_url")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or("/img/home-scene-1.svg");
+            let price = round_money(
+                args.get("price")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0)
+                    .max(0.0),
+            );
+            let conn = state.lock_db();
+            conn.execute(
+                "INSERT INTO reels (user_id, caption, video_url, cover_url, price) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![user.user_id, caption, video_url, cover_url, price],
+            )?;
+            let rid = conn.last_insert_rowid();
+            record_audit(
+                &conn,
+                user,
+                "reel_create",
+                "reel",
+                Some(rid.to_string()),
+                0.0,
+                json!({ "reel_id": rid, "price": price }),
+            );
+            Ok(json!({ "reel_id": rid, "price": price }))
+        }
+
+        "story_create" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            user.require_scope("write")?;
+            let caption = args
+                .get("caption")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            let media_url = args
+                .get("media_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let bg_preset = args
+                .get("bg_preset")
+                .and_then(|v| v.as_str())
+                .unwrap_or("gradient-purple");
+            let is_highlight = if args
+                .get("is_highlight")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                1
+            } else {
+                0
+            };
+            let mtype = if media_url.ends_with(".mp4") {
+                "video"
+            } else if media_url.is_empty() {
+                "text"
+            } else {
+                "image"
+            };
+            let conn = state.lock_db();
+            conn.execute(
+                "INSERT INTO stories (user_id, media_url, media_type, caption, bg_preset, is_highlight, expires_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now', '+24 hours'))",
+                params![user.user_id, media_url, mtype, caption, bg_preset, is_highlight],
+            )?;
+            let sid = conn.last_insert_rowid();
+            record_audit(&conn, user, "story_create", "story", Some(sid.to_string()), 0.0, json!({ "story_id": sid }));
+            Ok(json!({ "story_id": sid }))
+        }
+
+        "stream_start" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            user.require_scope("write")?;
+            let name = args
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            if name.is_empty() {
+                return Err(AppError::Unprocessable("Stream name required".into()));
+            }
+            let slug: String = name
+                .to_lowercase()
+                .chars()
+                .map(|c| if c.is_alphanumeric() { c } else { '-' })
+                .collect();
+            let rtmp_key = format!(
+                "sk_live_{}_{}",
+                user.username,
+                &Uuid::new_v4().simple().to_string()[..8]
+            );
+            let price = round_money(
+                args.get("price")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0)
+                    .max(0.0),
+            );
+            let req_sub = if args
+                .get("requires_subscription")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                1
+            } else {
+                0
+            };
+            let is_pub = if args
+                .get("is_public")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true)
+            {
+                1
+            } else {
+                0
+            };
+            let conn = state.lock_db();
+            conn.execute(
+                "INSERT INTO streams (user_id, name, slug, price, requires_subscription, is_public, status, rtmp_key)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'in-progress', ?7)",
+                params![user.user_id, name, slug, price, req_sub, is_pub, rtmp_key],
+            )?;
+            let stream_id = conn.last_insert_rowid();
+            record_audit(
+                &conn,
+                user,
+                "stream_start",
+                "stream",
+                Some(stream_id.to_string()),
+                0.0,
+                json!({ "stream_id": stream_id, "name": name }),
+            );
+            Ok(json!({
+                "stream_id": stream_id,
+                "rtmp_server": "rtmp://live.justfans.local/app",
+                "rtmp_key": rtmp_key,
+                "status": "in-progress"
+            }))
+        }
+
+        "stream_stop" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            user.require_scope("write")?;
+            let sid = args
+                .get("stream_id")
+                .and_then(|v| v.as_i64())
+                .ok_or_else(|| AppError::BadRequest("stream_id required".into()))?;
+            let conn = state.lock_db();
+            conn.execute(
+                "UPDATE streams SET status = 'ended' WHERE id = ?1 AND (user_id = ?2 OR ?3 = 1)",
+                params![sid, user.user_id, user.role_id],
+            )?;
+            record_audit(&conn, user, "stream_stop", "stream", Some(sid.to_string()), 0.0, json!({}));
+            Ok(json!({ "stream_id": sid, "status": "ended" }))
+        }
+
+        "ai_caption_suggest" => {
+            let topic = args
+                .get("topic")
+                .and_then(|v| v.as_str())
+                .unwrap_or("exclusive studio drop");
+            Ok(json!({
+                "suggestion": format!("✨ Just dropped a brand new {topic} set! Unlock or subscribe now for full HD behind-the-scenes access and let me know your favorite shot in the comments 💬🔥 #exclusive #creator")
+            }))
+        }
+
+        "vault_list" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            user.require_scope("read")?;
+            let conn = state.lock_db();
+            let mut stmt = conn.prepare(
+                "SELECT id, user_id, post_id, message_id, filename, file_url, file_type, file_size, is_vault, is_archived, created_at
+                 FROM attachments WHERE user_id = ?1 ORDER BY created_at DESC",
+            )?;
+            let items: Vec<Attachment> = stmt
+                .query_map(params![user.user_id], |r| {
+                    Ok(Attachment {
+                        id: r.get(0)?,
+                        user_id: r.get(1)?,
+                        post_id: r.get(2)?,
+                        message_id: r.get(3)?,
+                        filename: r.get(4)?,
+                        file_url: r.get(5)?,
+                        file_type: r.get(6)?,
+                        file_size: r.get(7)?,
+                        is_vault: r.get::<_, i64>(8)? != 0,
+                        is_archived: r.get::<_, i64>(9)? != 0,
+                        created_at: r.get(10)?,
+                    })
+                })?
+                .filter_map(Result::ok)
+                .collect();
+            Ok(json!({ "items": items }))
+        }
+
+        "vault_register_asset" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            user.require_scope("write")?;
+            let file_url = args
+                .get("file_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            if file_url.is_empty() {
+                return Err(AppError::Unprocessable("file_url required".into()));
+            }
+            let filename = args
+                .get("filename")
+                .and_then(|v| v.as_str())
+                .unwrap_or("vault-asset.jpg");
+            let file_type = args
+                .get("file_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("image");
+            let att_id = Uuid::new_v4().to_string();
+            let conn = state.lock_db();
+            conn.execute(
+                "INSERT INTO attachments (id, user_id, filename, file_url, file_type, file_size, is_vault)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 4096, 1)",
+                params![att_id, user.user_id, filename, file_url, file_type],
+            )?;
+            record_audit(&conn, user, "vault_register_asset", "attachment", Some(att_id.clone()), 0.0, json!({ "file_url": file_url }));
+            Ok(json!({ "attachment_id": att_id, "file_url": file_url }))
+        }
+
+        "vault_toggle_archive" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            user.require_scope("write")?;
+            let att_id = args
+                .get("attachment_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| AppError::BadRequest("attachment_id required".into()))?;
+            let conn = state.lock_db();
+            let (owner_id, cur): (i64, i64) = conn.query_row(
+                "SELECT user_id, is_archived FROM attachments WHERE id = ?1",
+                params![att_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            if owner_id != user.user_id && user.role_id != 1 {
+                return Err(AppError::Forbidden("Not your vault attachment".into()));
+            }
+            let next = if cur == 0 { 1 } else { 0 };
+            conn.execute(
+                "UPDATE attachments SET is_archived = ?1 WHERE id = ?2",
+                params![next, att_id],
+            )?;
+            Ok(json!({ "attachment_id": att_id, "is_archived": next != 0 }))
+        }
+
+        "feed_read" => {
+            if let Some(u) = auth {
+                u.require_scope("read")?;
+            }
+            let viewer_id = auth.map(|a| a.user_id);
+            let page = args.get("page").and_then(|v| v.as_i64()).unwrap_or(1).max(1);
+            let offset = (page - 1) * 20;
+            let filter = args
+                .get("filter")
+                .and_then(|v| v.as_str())
+                .unwrap_or("all")
+                .trim()
+                .to_lowercase();
+            let conn = state.lock_db();
+            let pids: Vec<i64> = match (filter.as_str(), viewer_id) {
+                ("subscribed", Some(vid)) => {
+                    let mut stmt = conn.prepare(
+                        "SELECT id FROM posts
+                         WHERE status = 1
+                           AND (release_date IS NULL OR release_date <= datetime('now'))
+                           AND (expire_date IS NULL OR expire_date >= datetime('now'))
+                           AND (
+                               user_id = ?1
+                               OR user_id IN (SELECT recipient_user_id FROM subscriptions WHERE sender_user_id = ?1 AND status = 'completed' AND expires_at >= datetime('now'))
+                               OR user_id IN (SELECT ulm.user_id FROM user_list_members ulm JOIN user_lists ul ON ulm.list_id = ul.id WHERE ul.user_id = ?1 AND ul.list_type = 'following')
+                           )
+                         ORDER BY is_pinned DESC, id DESC LIMIT 20 OFFSET ?2",
+                    )?;
+                    let rows = stmt
+                        .query_map(params![vid, offset], |r| r.get(0))?
+                        .filter_map(Result::ok)
+                        .collect();
+                    rows
+                }
+                ("media", _) => {
+                    let mut stmt = conn.prepare(
+                        "SELECT id FROM posts
+                         WHERE status = 1
+                           AND (release_date IS NULL OR release_date <= datetime('now'))
+                           AND (expire_date IS NULL OR expire_date >= datetime('now'))
+                           AND EXISTS (SELECT 1 FROM attachments a WHERE a.post_id = posts.id)
+                         ORDER BY is_pinned DESC, id DESC LIMIT 20 OFFSET ?1",
+                    )?;
+                    let rows = stmt
+                        .query_map(params![offset], |r| r.get(0))?
+                        .filter_map(Result::ok)
+                        .collect();
+                    rows
+                }
+                ("photos", _) => {
+                    let mut stmt = conn.prepare(
+                        "SELECT id FROM posts
+                         WHERE status = 1
+                           AND (release_date IS NULL OR release_date <= datetime('now'))
+                           AND (expire_date IS NULL OR expire_date >= datetime('now'))
+                           AND EXISTS (SELECT 1 FROM attachments a WHERE a.post_id = posts.id AND a.file_type IN ('image', 'jpg', 'jpeg', 'png', 'webp', 'gif'))
+                         ORDER BY is_pinned DESC, id DESC LIMIT 20 OFFSET ?1",
+                    )?;
+                    let rows = stmt
+                        .query_map(params![offset], |r| r.get(0))?
+                        .filter_map(Result::ok)
+                        .collect();
+                    rows
+                }
+                ("videos", _) => {
+                    let mut stmt = conn.prepare(
+                        "SELECT id FROM posts
+                         WHERE status = 1
+                           AND (release_date IS NULL OR release_date <= datetime('now'))
+                           AND (expire_date IS NULL OR expire_date >= datetime('now'))
+                           AND EXISTS (SELECT 1 FROM attachments a WHERE a.post_id = posts.id AND a.file_type IN ('video', 'mp4', 'mov', 'webm'))
+                         ORDER BY is_pinned DESC, id DESC LIMIT 20 OFFSET ?1",
+                    )?;
+                    let rows = stmt
+                        .query_map(params![offset], |r| r.get(0))?
+                        .filter_map(Result::ok)
+                        .collect();
+                    rows
+                }
+                _ => {
+                    let mut stmt = conn.prepare(
+                        "SELECT id FROM posts
+                         WHERE status = 1
+                           AND (release_date IS NULL OR release_date <= datetime('now'))
+                           AND (expire_date IS NULL OR expire_date >= datetime('now'))
+                         ORDER BY is_pinned DESC, id DESC LIMIT 20 OFFSET ?1",
+                    )?;
+                    let rows = stmt
+                        .query_map(params![offset], |r| r.get(0))?
+                        .filter_map(Result::ok)
+                        .collect();
+                    rows
+                }
+            };
+            let mut posts = Vec::new();
+            for pid in pids {
+                if let Ok(pv) = build_post_view(&conn, pid, viewer_id) {
+                    if let Some(vid) = viewer_id {
+                        if is_blocked_between(&conn, vid, pv.user_id) {
+                            continue;
+                        }
+                    }
+                    posts.push(pv);
+                }
+            }
+            Ok(json!({ "page": page, "filter": filter, "posts": posts }))
+        }
+
+        "creator_discover" => {
+            if let Some(u) = auth {
+                u.require_scope("read")?;
+            }
+            let viewer_id = auth.map(|a| a.user_id);
+            let q = args
+                .get("query")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_lowercase();
+            let pattern = format!("%{q}%");
+            let conn = state.lock_db();
+            let mut stmt = conn.prepare(
+                "SELECT id FROM users WHERE public_profile = 1 AND (LOWER(name) LIKE ?1 OR LOWER(username) LIKE ?1 OR LOWER(bio) LIKE ?1) ORDER BY id ASC LIMIT 20",
+            )?;
+            let uids: Vec<i64> = stmt
+                .query_map(params![pattern], |r| r.get(0))?
+                .filter_map(Result::ok)
+                .collect();
+            let mut creators = Vec::new();
+            for uid in uids {
+                if let Ok(p) = get_user_public_profile(&conn, uid, viewer_id) {
+                    creators.push(p);
+                }
+            }
+            Ok(json!({ "creators": creators }))
+        }
+
+        "profile_get" => {
+            if let Some(u) = auth {
+                u.require_scope("read")?;
+            }
+            let viewer_id = auth.map(|a| a.user_id);
+            let username = args
+                .get("username")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| AppError::BadRequest("username required".into()))?;
+            let conn = state.lock_db();
+            let target_id: i64 = conn
+                .query_row(
+                    "SELECT id FROM users WHERE username = ?1",
+                    params![username.trim()],
+                    |r| r.get(0),
+                )
+                .map_err(|_| AppError::NotFound("Profile not found".into()))?;
+            let profile = get_user_public_profile(&conn, target_id, viewer_id)?;
+            let mut stmt = conn.prepare(
+                "SELECT id FROM posts WHERE user_id = ?1 AND status = 1
+                 AND (release_date IS NULL OR release_date <= datetime('now'))
+                 AND (expire_date IS NULL OR expire_date >= datetime('now'))
+                 ORDER BY is_pinned DESC, id DESC LIMIT 20",
+            )?;
+            let pids: Vec<i64> = stmt
+                .query_map(params![target_id], |r| r.get(0))?
+                .filter_map(Result::ok)
+                .collect();
+            let mut posts = Vec::new();
+            for pid in pids {
+                if let Ok(pv) = build_post_view(&conn, pid, viewer_id) {
+                    posts.push(pv);
+                }
+            }
+            Ok(json!({ "profile": profile, "posts": posts }))
+        }
+
+        "post_react" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            user.require_scope("engage")?;
+            let conn = state.lock_db();
+            if let Some(pid) = args.get("post_id").and_then(|v| v.as_i64()) {
+                let author_id: i64 = conn.query_row(
+                    "SELECT user_id FROM posts WHERE id = ?1",
+                    params![pid],
+                    |r| r.get(0),
+                )?;
+                if is_blocked_between(&conn, user.user_id, author_id) {
+                    return Err(AppError::Forbidden("Blocked".into()));
+                }
+                let existing: Option<i64> = conn
+                    .query_row(
+                        "SELECT id FROM reactions WHERE post_id = ?1 AND user_id = ?2",
+                        params![pid, user.user_id],
+                        |r| r.get(0),
+                    )
+                    .ok();
+                let liked = if let Some(rid) = existing {
+                    conn.execute("DELETE FROM reactions WHERE id = ?1", params![rid])?;
+                    false
+                } else {
+                    conn.execute(
+                        "INSERT INTO reactions (user_id, reaction_type, post_id) VALUES (?1, 'like', ?2)",
+                        params![user.user_id, pid],
+                    )?;
+                    true
+                };
+                record_audit(&conn, user, "post_react", "post", Some(pid.to_string()), 0.0, json!({ "liked": liked }));
+                Ok(json!({ "post_id": pid, "liked": liked }))
+            } else if let Some(cid) = args.get("comment_id").and_then(|v| v.as_i64()) {
+                let author_id: i64 = conn.query_row(
+                    "SELECT user_id FROM post_comments WHERE id = ?1",
+                    params![cid],
+                    |r| r.get(0),
+                )?;
+                if is_blocked_between(&conn, user.user_id, author_id) {
+                    return Err(AppError::Forbidden("Blocked".into()));
+                }
+                let existing: Option<i64> = conn
+                    .query_row(
+                        "SELECT id FROM reactions WHERE post_comment_id = ?1 AND user_id = ?2",
+                        params![cid, user.user_id],
+                        |r| r.get(0),
+                    )
+                    .ok();
+                let liked = if let Some(rid) = existing {
+                    conn.execute("DELETE FROM reactions WHERE id = ?1", params![rid])?;
+                    false
+                } else {
+                    conn.execute(
+                        "INSERT INTO reactions (user_id, reaction_type, post_comment_id) VALUES (?1, 'like', ?2)",
+                        params![user.user_id, cid],
+                    )?;
+                    true
+                };
+                record_audit(&conn, user, "post_react", "comment", Some(cid.to_string()), 0.0, json!({ "liked": liked }));
+                Ok(json!({ "comment_id": cid, "liked": liked }))
+            } else if let Some(rid) = args.get("reel_id").and_then(|v| v.as_i64()) {
+                let author_id: i64 = conn.query_row(
+                    "SELECT user_id FROM reels WHERE id = ?1",
+                    params![rid],
+                    |r| r.get(0),
+                )?;
+                if is_blocked_between(&conn, user.user_id, author_id) {
+                    return Err(AppError::Forbidden("Blocked".into()));
+                }
+                let existing: Option<i64> = conn
+                    .query_row(
+                        "SELECT id FROM reactions WHERE reel_id = ?1 AND user_id = ?2",
+                        params![rid, user.user_id],
+                        |r| r.get(0),
+                    )
+                    .ok();
+                let liked = if let Some(rx_id) = existing {
+                    conn.execute("DELETE FROM reactions WHERE id = ?1", params![rx_id])?;
+                    false
+                } else {
+                    conn.execute(
+                        "INSERT INTO reactions (user_id, reaction_type, reel_id) VALUES (?1, 'like', ?2)",
+                        params![user.user_id, rid],
+                    )?;
+                    true
+                };
+                record_audit(&conn, user, "post_react", "reel", Some(rid.to_string()), 0.0, json!({ "liked": liked }));
+                Ok(json!({ "reel_id": rid, "liked": liked }))
+            } else {
+                Err(AppError::BadRequest("post_id, comment_id, or reel_id required".into()))
+            }
+        }
+
+        "post_comment" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            user.require_scope("engage")?;
+            let pid = args
+                .get("post_id")
+                .and_then(|v| v.as_i64())
+                .ok_or_else(|| AppError::BadRequest("post_id required".into()))?;
+            let message = args
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            if message.is_empty() {
+                return Err(AppError::Unprocessable("Comment cannot be empty".into()));
+            }
+            let conn = state.lock_db();
+            let pv = build_post_view(&conn, pid, Some(user.user_id))?;
+            if is_blocked_between(&conn, user.user_id, pv.user_id) || !pv.is_unlocked {
+                return Err(AppError::Forbidden("Post is locked or blocked".into()));
+            }
+            conn.execute(
+                "INSERT INTO post_comments (post_id, user_id, message) VALUES (?1, ?2, ?3)",
+                params![pid, user.user_id, message],
+            )?;
+            let cid = conn.last_insert_rowid();
+            record_audit(&conn, user, "post_comment", "comment", Some(cid.to_string()), 0.0, json!({ "post_id": pid }));
+            Ok(json!({ "comment_id": cid, "post_id": pid, "message": message }))
+        }
+
+        "poll_vote" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            user.require_scope("engage")?;
+            let poll_id = args
+                .get("poll_id")
+                .and_then(|v| v.as_i64())
+                .ok_or_else(|| AppError::BadRequest("poll_id required".into()))?;
+            let answer_id = args
+                .get("answer_id")
+                .and_then(|v| v.as_i64())
+                .ok_or_else(|| AppError::BadRequest("answer_id required".into()))?;
+            let conn = state.lock_db();
+            let post_id: i64 = conn.query_row(
+                "SELECT post_id FROM polls WHERE id = ?1",
+                params![poll_id],
+                |r| r.get(0),
+            )?;
+            let pv = build_post_view(&conn, post_id, Some(user.user_id))?;
+            if !pv.is_unlocked {
+                return Err(AppError::Forbidden("Unlock post to vote".into()));
+            }
+            let valid: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM poll_answers WHERE id = ?1 AND poll_id = ?2",
+                params![answer_id, poll_id],
+                |r| r.get(0),
+            )?;
+            if valid == 0 {
+                return Err(AppError::Unprocessable("Invalid answer_id for poll".into()));
+            }
+            conn.execute(
+                "INSERT INTO poll_user_answers (poll_id, user_id, answer_id) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(poll_id, user_id) DO UPDATE SET answer_id = excluded.answer_id",
+                params![poll_id, user.user_id, answer_id],
+            )?;
+            record_audit(&conn, user, "poll_vote", "poll", Some(poll_id.to_string()), 0.0, json!({ "answer_id": answer_id }));
+            let updated_pv = build_post_view(&conn, post_id, Some(user.user_id))?;
+            Ok(json!({ "poll": updated_pv.poll }))
+        }
+
+        "social_follow_or_block" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            user.require_scope("engage")?;
+            let target_id = args
+                .get("target_user_id")
+                .and_then(|v| v.as_i64())
+                .ok_or_else(|| AppError::BadRequest("target_user_id required".into()))?;
+            let action = args
+                .get("action")
+                .and_then(|v| v.as_str())
+                .unwrap_or("follow");
+            if target_id == user.user_id {
+                return Err(AppError::Unprocessable("Cannot target yourself".into()));
+            }
+            let conn = state.lock_db();
+            let list_type = if action == "block" { "blocked" } else { "following" };
+            let lid: i64 = conn.query_row(
+                "SELECT id FROM user_lists WHERE user_id = ?1 AND list_type = ?2",
+                params![user.user_id, list_type],
+                |r| r.get(0),
+            )?;
+            let existing: Option<i64> = conn
+                .query_row(
+                    "SELECT id FROM user_list_members WHERE list_id = ?1 AND user_id = ?2",
+                    params![lid, target_id],
+                    |r| r.get(0),
+                )
+                .ok();
+            let active = if let Some(mid) = existing {
+                conn.execute("DELETE FROM user_list_members WHERE id = ?1", params![mid])?;
+                false
+            } else {
+                conn.execute(
+                    "INSERT INTO user_list_members (list_id, user_id) VALUES (?1, ?2)",
+                    params![lid, target_id],
+                )?;
+                if list_type == "following" {
+                    if let Ok(fl_id) = conn.query_row::<i64, _, _>(
+                        "SELECT id FROM user_lists WHERE user_id = ?1 AND list_type = 'followers'",
+                        params![target_id],
+                        |r| r.get(0),
+                    ) {
+                        let _ = conn.execute(
+                            "INSERT OR IGNORE INTO user_list_members (list_id, user_id) VALUES (?1, ?2)",
+                            params![fl_id, user.user_id],
+                        );
+                    }
+                }
+                true
+            };
+            record_audit(&conn, user, "social_follow_or_block", "user", Some(target_id.to_string()), 0.0, json!({ "action": action, "active": active }));
+            Ok(json!({ "target_user_id": target_id, "action": action, "active": active }))
+        }
+
+        "messenger_contacts_and_thread" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            user.require_scope("messages")?;
+            let conn = state.lock_db();
+            if let Some(other_id) = args.get("other_user_id").and_then(|v| v.as_i64()) {
+                let mut stmt = conn.prepare(
+                    "SELECT m.id, m.sender_id, m.receiver_id, u.name, u.username, u.avatar,
+                            m.message, m.price, m.is_seen, m.is_pinned, m.created_at
+                     FROM user_messages m JOIN users u ON m.sender_id = u.id
+                     WHERE (m.sender_id = ?1 AND m.receiver_id = ?2)
+                        OR (m.sender_id = ?2 AND m.receiver_id = ?1)
+                     ORDER BY m.id ASC",
+                )?;
+                let msgs: Vec<Value> = stmt
+                    .query_map(params![user.user_id, other_id], |r| {
+                        let mid: i64 = r.get(0)?;
+                        let sender_id: i64 = r.get(1)?;
+                        let price: f64 = r.get(7)?;
+                        let is_unlocked = sender_id == user.user_id
+                            || price <= 0.0
+                            || conn
+                                .query_row(
+                                    "SELECT COUNT(*) FROM transactions WHERE sender_user_id = ?1 AND message_id = ?2 AND tx_type = 'message-unlock' AND status = 'approved'",
+                                    params![user.user_id, mid],
+                                    |tr| tr.get::<_, i64>(0),
+                                )
+                                .unwrap_or(0)
+                                > 0;
+                        let raw_msg: String = r.get(6)?;
+                        Ok(json!({
+                            "id": mid,
+                            "sender_id": sender_id,
+                            "receiver_id": r.get::<_, i64>(2)?,
+                            "sender_username": r.get::<_, String>(4)?,
+                            "message": if is_unlocked { raw_msg } else { "🔒 Locked PPV Message".into() },
+                            "price": price,
+                            "is_unlocked": is_unlocked,
+                            "created_at": r.get::<_, String>(10)?
+                        }))
+                    })?
+                    .filter_map(Result::ok)
+                    .collect();
+                return Ok(json!({ "other_user_id": other_id, "messages": msgs }));
+            }
+
+            let mut stmt = conn.prepare("SELECT id, name, username FROM users WHERE id != ?1 ORDER BY id ASC")?;
+            let contacts: Vec<Value> = stmt
+                .query_map(params![user.user_id], |r| {
+                    Ok(json!({
+                        "user_id": r.get::<_, i64>(0)?,
+                        "name": r.get::<_, String>(1)?,
+                        "username": r.get::<_, String>(2)?,
+                    }))
+                })?
+                .filter_map(Result::ok)
+                .collect();
+            Ok(json!({ "contacts": contacts }))
+        }
+
+        "messenger_send_dm" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            user.require_scope("messages")?;
+            let receiver_id = args
+                .get("receiver_id")
+                .and_then(|v| v.as_i64())
+                .ok_or_else(|| AppError::BadRequest("receiver_id required".into()))?;
+            let msg = args
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            if msg.is_empty() {
+                return Err(AppError::Unprocessable("Message text required".into()));
+            }
+            if receiver_id == user.user_id {
+                return Err(AppError::Unprocessable("Cannot message yourself".into()));
+            }
+            let price = round_money(
+                args.get("price")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0)
+                    .max(0.0),
+            );
+            let conn = state.lock_db();
+            if is_blocked_between(&conn, user.user_id, receiver_id) {
+                return Err(AppError::Forbidden("Blocked".into()));
+            }
+            conn.execute(
+                "INSERT INTO user_messages (sender_id, receiver_id, message, price) VALUES (?1, ?2, ?3, ?4)",
+                params![user.user_id, receiver_id, msg, price],
+            )?;
+            let mid = conn.last_insert_rowid();
+            record_audit(
+                &conn,
+                user,
+                "messenger_send_dm",
+                "message",
+                Some(mid.to_string()),
+                0.0,
+                json!({ "receiver_id": receiver_id, "price": price }),
+            );
+            Ok(json!({ "message_id": mid, "receiver_id": receiver_id, "price": price }))
+        }
+
+        "messenger_broadcast" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            user.require_scope("messages")?;
+            let msg = args
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            let attachments = args
+                .get("attachments")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            if msg.is_empty() && attachments.is_empty() {
+                return Err(AppError::Unprocessable("Message text or attachment required".into()));
+            }
+            let price = round_money(
+                args.get("price")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0)
+                    .max(0.0),
+            );
+            let target = args
+                .get("target")
+                .or_else(|| args.get("audience"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("subscribers")
+                .trim()
+                .to_lowercase();
+            let conn = state.lock_db();
+            let mut targets: Vec<i64> = Vec::new();
+            if let Some(arr) = args.get("recipient_ids").and_then(|v| v.as_array()) {
+                for v in arr {
+                    if let Some(id) = v.as_i64() {
+                        if id != user.user_id && !targets.contains(&id) {
+                            targets.push(id);
+                        }
+                    }
+                }
+            }
+            if targets.is_empty() {
+                if let Some(lid) = args.get("list_id").and_then(|v| v.as_i64()) {
+                    let mut stmt = conn.prepare(
+                        "SELECT ulm.user_id FROM user_list_members ulm
+                         JOIN user_lists ul ON ulm.list_id = ul.id
+                         WHERE ul.id = ?1 AND ul.user_id = ?2",
+                    )?;
+                    let rows: Vec<i64> = stmt
+                        .query_map(params![lid, user.user_id], |r| r.get(0))?
+                        .filter_map(Result::ok)
+                        .collect();
+                    for id in rows {
+                        if id != user.user_id && !targets.contains(&id) {
+                            targets.push(id);
+                        }
+                    }
+                } else {
+                    if target == "subscribers" || target == "all" {
+                        let mut stmt = conn.prepare(
+                            "SELECT DISTINCT sender_user_id FROM subscriptions
+                             WHERE recipient_user_id = ?1 AND status = 'completed' AND expires_at >= datetime('now')",
+                        )?;
+                        let rows: Vec<i64> = stmt
+                            .query_map(params![user.user_id], |r| r.get(0))?
+                            .filter_map(Result::ok)
+                            .collect();
+                        for id in rows {
+                            if id != user.user_id && !targets.contains(&id) {
+                                targets.push(id);
+                            }
+                        }
+                    }
+                    if target == "followers" || target == "all" {
+                        let mut f_stmt = conn.prepare(
+                            "SELECT DISTINCT ul.user_id FROM user_list_members ulm
+                             JOIN user_lists ul ON ulm.list_id = ul.id
+                             WHERE ulm.user_id = ?1 AND ul.list_type = 'following'
+                             UNION
+                             SELECT DISTINCT ulm.user_id FROM user_list_members ulm
+                             JOIN user_lists ul ON ulm.list_id = ul.id
+                             WHERE ul.user_id = ?1 AND ul.list_type = 'followers'",
+                        )?;
+                        let rows: Vec<i64> = f_stmt
+                            .query_map(params![user.user_id], |r| r.get(0))?
+                            .filter_map(Result::ok)
+                            .collect();
+                        for id in rows {
+                            if id != user.user_id && !targets.contains(&id) {
+                                targets.push(id);
+                            }
+                        }
+                    }
+                }
+            }
+            let mut sent_ids = Vec::new();
+            for rid in targets {
+                if !is_blocked_between(&conn, user.user_id, rid) {
+                    conn.execute(
+                        "INSERT INTO user_messages (sender_id, receiver_id, message, price) VALUES (?1, ?2, ?3, ?4)",
+                        params![user.user_id, rid, msg, price],
+                    )?;
+                    let mid = conn.last_insert_rowid();
+                    for att in &attachments {
+                        let fname = att.get("filename").and_then(|v| v.as_str()).unwrap_or("");
+                        if !fname.is_empty() {
+                            let ftype = att.get("file_type").and_then(|v| v.as_str()).unwrap_or("image");
+                            let thumb = att.get("thumbnail").and_then(|v| v.as_str());
+                            let _ = conn.execute(
+                                "INSERT INTO attachments (id, user_id, message_id, filename, driver, file_type, thumbnail)
+                                 VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6)",
+                                params![format!("att-bcast-{mid}-{}", sent_ids.len()), user.user_id, mid, fname, ftype, thumb],
+                            );
+                        }
+                    }
+                    sent_ids.push(mid);
+                }
+            }
+            record_audit(
+                &conn,
+                user,
+                "messenger_broadcast",
+                "broadcast",
+                None,
+                0.0,
+                json!({ "target": target, "sent_count": sent_ids.len(), "price": price }),
+            );
+            Ok(json!({ "target": target, "sent_count": sent_ids.len(), "message_ids": sent_ids }))
+        }
+
+        "wallet_transact" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            user.require_scope("wallet")?;
+            let ptype = args
+                .get("payment_type")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| AppError::BadRequest("payment_type required".into()))?
+                .trim();
+            let raw_provider = args
+                .get("provider")
+                .and_then(|v| v.as_str())
+                .unwrap_or("credit")
+                .trim()
+                .to_lowercase();
+            let provider = match raw_provider.as_str() {
+                "wallet" | "credit" | "" => "credit".to_string(),
+                "stripe" | "paypal" | "crypto" | "ccbill" => raw_provider,
+                other => return Err(AppError::BadRequest(format!("Unsupported provider: {other}"))),
+            };
+
+            let mut conn = state.lock_db();
+            if ptype == "deposit" {
+                let amt = round_money(args.get("amount").and_then(|v| v.as_f64()).unwrap_or(0.0));
+                if amt <= 0.0 || !amt.is_finite() {
+                    return Err(AppError::Unprocessable("Deposit amount must be positive".into()));
+                }
+                let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+                let next_inv: i64 = tx
+                    .query_row("SELECT COALESCE(MAX(invoice_id), 1000) + 1 FROM transactions", [], |r| r.get(0))
+                    .unwrap_or(1001);
+                tx.execute(
+                    "UPDATE wallets SET total = ROUND(total + ?1, 2), updated_at = datetime('now') WHERE user_id = ?2",
+                    params![amt, user.user_id],
+                )?;
+                tx.execute(
+                    "INSERT INTO transactions (sender_user_id, recipient_user_id, tx_type, status, amount, payment_provider, invoice_id)
+                     VALUES (?1, ?1, 'deposit', 'approved', ?2, ?3, ?4)",
+                    params![user.user_id, amt, provider, next_inv],
+                )?;
+                let new_bal: f64 = tx.query_row(
+                    "SELECT total FROM wallets WHERE user_id = ?1",
+                    params![user.user_id],
+                    |r| r.get(0),
+                )?;
+                tx.commit()?;
+                record_audit(&conn, user, "wallet_transact", "deposit", Some(next_inv.to_string()), 0.0, json!({ "amount": amt }));
+                return Ok(json!({
+                    "payment_type": "deposit",
+                    "amount": amt,
+                    "invoice_id": next_inv,
+                    "wallet_balance": round_money(new_bal)
+                }));
+            }
+
+            let post_id = args.get("post_id").and_then(|v| v.as_i64());
+            let message_id = args.get("message_id").and_then(|v| v.as_i64());
+            let reel_id = args.get("reel_id").and_then(|v| v.as_i64());
+            let stream_id = args.get("stream_id").and_then(|v| v.as_i64());
+            let months = args.get("months").and_then(|v| v.as_i64()).unwrap_or(1);
+
+            let (raw_amt, recipient_id) = match ptype {
+                "subscription" => {
+                    let rec = args
+                        .get("recipient_user_id")
+                        .and_then(|v| v.as_i64())
+                        .ok_or_else(|| AppError::BadRequest("recipient_user_id required".into()))?;
+                    if rec == user.user_id {
+                        return Err(AppError::Unprocessable("Cannot subscribe to yourself".into()));
+                    }
+                    let price: f64 = match months {
+                        3 => conn.query_row("SELECT profile_access_price_3_months * 3 FROM users WHERE id = ?1", params![rec], |r| r.get(0))?,
+                        6 => conn.query_row("SELECT profile_access_price_6_months * 6 FROM users WHERE id = ?1", params![rec], |r| r.get(0))?,
+                        12 => conn.query_row("SELECT profile_access_price_12_months * 12 FROM users WHERE id = ?1", params![rec], |r| r.get(0))?,
+                        _ => conn.query_row("SELECT profile_access_price FROM users WHERE id = ?1", params![rec], |r| r.get(0))?,
+                    };
+                    (price.max(0.0), rec)
+                }
+                "post-unlock" => {
+                    let pid = post_id.ok_or_else(|| AppError::BadRequest("post_id required".into()))?;
+                    let (rec, price): (i64, f64) = conn.query_row("SELECT user_id, price FROM posts WHERE id = ?1", params![pid], |r| Ok((r.get(0)?, r.get(1)?)))?;
+                    let dup: i64 = conn.query_row("SELECT COUNT(*) FROM transactions WHERE sender_user_id = ?1 AND post_id = ?2 AND tx_type = 'post-unlock' AND status = 'approved'", params![user.user_id, pid], |r| r.get(0)).unwrap_or(0);
+                    if dup > 0 {
+                        return Err(AppError::Unprocessable("Post already unlocked".into()));
+                    }
+                    (price, rec)
+                }
+                "message-unlock" => {
+                    let mid = message_id.ok_or_else(|| AppError::BadRequest("message_id required".into()))?;
+                    let (rec, price): (i64, f64) = conn.query_row("SELECT sender_id, price FROM user_messages WHERE id = ?1", params![mid], |r| Ok((r.get(0)?, r.get(1)?)))?;
+                    let dup: i64 = conn.query_row("SELECT COUNT(*) FROM transactions WHERE sender_user_id = ?1 AND message_id = ?2 AND tx_type = 'message-unlock' AND status = 'approved'", params![user.user_id, mid], |r| r.get(0)).unwrap_or(0);
+                    if dup > 0 {
+                        return Err(AppError::Unprocessable("Message already unlocked".into()));
+                    }
+                    (price, rec)
+                }
+                "reel-unlock" => {
+                    let rid = reel_id.ok_or_else(|| AppError::BadRequest("reel_id required".into()))?;
+                    let (rec, price): (i64, f64) = conn.query_row("SELECT user_id, price FROM reels WHERE id = ?1", params![rid], |r| Ok((r.get(0)?, r.get(1)?)))?;
+                    let dup: i64 = conn.query_row("SELECT COUNT(*) FROM transactions WHERE sender_user_id = ?1 AND reel_id = ?2 AND tx_type = 'reel-unlock' AND status = 'approved'", params![user.user_id, rid], |r| r.get(0)).unwrap_or(0);
+                    if dup > 0 {
+                        return Err(AppError::Unprocessable("Reel already unlocked".into()));
+                    }
+                    (price, rec)
+                }
+                "stream-unlock" => {
+                    let sid = stream_id.ok_or_else(|| AppError::BadRequest("stream_id required".into()))?;
+                    let (rec, price): (i64, f64) = conn.query_row("SELECT user_id, price FROM streams WHERE id = ?1", params![sid], |r| Ok((r.get(0)?, r.get(1)?)))?;
+                    let dup: i64 = conn.query_row("SELECT COUNT(*) FROM transactions WHERE sender_user_id = ?1 AND stream_id = ?2 AND tx_type = 'stream-unlock' AND status = 'approved'", params![user.user_id, sid], |r| r.get(0)).unwrap_or(0);
+                    if dup > 0 {
+                        return Err(AppError::Unprocessable("Stream already unlocked".into()));
+                    }
+                    (price, rec)
+                }
+                "tip" => {
+                    let amt = args.get("amount").and_then(|v| v.as_f64()).unwrap_or(5.0);
+                    if amt <= 0.0 || !amt.is_finite() {
+                        return Err(AppError::Unprocessable("Tip must be > 0".into()));
+                    }
+                    let rec = args
+                        .get("recipient_user_id")
+                        .and_then(|v| v.as_i64())
+                        .ok_or_else(|| AppError::BadRequest("recipient_user_id required".into()))?;
+                    (amt, rec)
+                }
+                other => return Err(AppError::BadRequest(format!("Unsupported payment_type: {other}"))),
+            };
+
+            if recipient_id == user.user_id {
+                return Err(AppError::Unprocessable("Cannot transact with yourself.".into()));
+            }
+            if is_blocked_between(&conn, user.user_id, recipient_id) {
+                return Err(AppError::Forbidden("Transaction blocked due to privacy restrictions.".into()));
+            }
+
+            let amount = round_money(raw_amt);
+
+            if let Some(tid) = user.agent_token_id {
+                if let Some(max_tx) = user.max_spend_per_tx {
+                    if amount > max_tx {
+                        return Err(AppError::Unprocessable(format!(
+                            "Autonomous agent payment (${amount:.2}) exceeds per-transaction spend cap (${max_tx:.2})."
+                        )));
+                    }
+                }
+                if let Some(daily_lim) = user.daily_spend_limit {
+                    let spent_today: f64 = conn
+                        .query_row(
+                            "SELECT COALESCE(SUM(amount_spent), 0.0) FROM agent_audit_logs
+                             WHERE agent_token_id = ?1 AND status = 'success' AND created_at >= datetime('now', '-24 hours')",
+                            params![tid],
+                            |r| r.get(0),
+                        )
+                        .unwrap_or(0.0);
+                    if spent_today + amount > daily_lim {
+                        return Err(AppError::Unprocessable(format!(
+                            "Autonomous agent payment (${amount:.2}) would exceed 24h daily spend cap (${daily_lim:.2})."
+                        )));
+                    }
+                }
+            }
+
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            if provider == "credit" && amount > 0.0 {
+                let bal: f64 = tx
+                    .query_row("SELECT total FROM wallets WHERE user_id = ?1", params![user.user_id], |r| r.get(0))
+                    .unwrap_or(0.0);
+                if bal < amount {
+                    return Err(AppError::Unprocessable("Insufficient wallet balance".into()));
+                }
+                tx.execute(
+                    "UPDATE wallets SET total = ROUND(total - ?1, 2), updated_at = datetime('now') WHERE user_id = ?2",
+                    params![amount, user.user_id],
+                )?;
+            }
+            if amount > 0.0 {
+                let creator_share = round_money(amount * 0.85);
+                tx.execute(
+                    "UPDATE wallets SET total = ROUND(total + ?1, 2), updated_at = datetime('now') WHERE user_id = ?2",
+                    params![creator_share, recipient_id],
+                )?;
+            }
+            let next_inv: i64 = tx
+                .query_row("SELECT COALESCE(MAX(invoice_id), 1000) + 1 FROM transactions", [], |r| r.get(0))
+                .unwrap_or(1001);
+            tx.execute(
+                "INSERT INTO transactions (sender_user_id, recipient_user_id, tx_type, status, amount, payment_provider, post_id, message_id, stream_id, reel_id, invoice_id)
+                 VALUES (?1, ?2, ?3, 'approved', ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![user.user_id, recipient_id, ptype, amount, provider, post_id, message_id, stream_id, reel_id, next_inv],
+            )?;
+            if ptype == "subscription" {
+                let days = months * 30;
+                tx.execute(
+                    "INSERT INTO subscriptions (sender_user_id, recipient_user_id, amount, provider, status, expires_at)
+                     VALUES (?1, ?2, ?3, ?4, 'completed', datetime('now', ?5))",
+                    params![user.user_id, recipient_id, amount, provider, format!("+{days} days")],
+                )?;
+            }
+            let updated_bal: f64 = tx
+                .query_row("SELECT total FROM wallets WHERE user_id = ?1", params![user.user_id], |r| r.get(0))
+                .unwrap_or(0.0);
+            tx.commit()?;
+
+            record_audit(
+                &conn,
+                user,
+                "wallet_transact",
+                "payment",
+                Some(next_inv.to_string()),
+                amount,
+                json!({ "payment_type": ptype, "recipient_user_id": recipient_id, "amount": amount }),
+            );
+            Ok(json!({
+                "payment_type": ptype,
+                "amount": amount,
+                "invoice_id": next_inv,
+                "wallet_balance": round_money(updated_bal)
+            }))
+        }
+
+        "wallet_withdraw" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            user.require_scope("wallet")?;
+            let amount = round_money(args.get("amount").and_then(|v| v.as_f64()).unwrap_or(0.0));
+            if amount < 20.0 || !amount.is_finite() {
+                return Err(AppError::Unprocessable("Minimum withdrawal amount is $20.00".into()));
+            }
+            let method = args
+                .get("payment_method")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Bank Transfer");
+            let ident = args
+                .get("payment_identifier")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let mut conn = state.lock_db();
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            let bal: f64 = tx
+                .query_row("SELECT total FROM wallets WHERE user_id = ?1", params![user.user_id], |r| r.get(0))
+                .unwrap_or(0.0);
+            if bal < amount {
+                return Err(AppError::Unprocessable("Insufficient wallet balance".into()));
+            }
+            tx.execute(
+                "UPDATE wallets SET total = ROUND(total - ?1, 2), updated_at = datetime('now') WHERE user_id = ?2",
+                params![amount, user.user_id],
+            )?;
+            tx.execute(
+                "INSERT INTO withdrawals (user_id, amount, status, payment_method, payment_identifier)
+                 VALUES (?1, ?2, 'requested', ?3, ?4)",
+                params![user.user_id, amount, method, ident],
+            )?;
+            let wid = tx.last_insert_rowid();
+            let new_bal: f64 = tx.query_row("SELECT total FROM wallets WHERE user_id = ?1", params![user.user_id], |r| r.get(0))?;
+            tx.commit()?;
+            record_audit(&conn, user, "wallet_withdraw", "withdrawal", Some(wid.to_string()), 0.0, json!({ "amount": amount }));
+            Ok(json!({
+                "withdrawal_id": wid,
+                "amount": amount,
+                "status": "requested",
+                "wallet_balance": round_money(new_bal)
+            }))
+        }
+
+        "analytics_and_notifications" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            user.require_scope("read")?;
+            let conn = state.lock_db();
+            let profile = get_user_public_profile(&conn, user.user_id, Some(user.user_id))?;
+            let (gross_earnings, tx_count): (f64, i64) = conn
+                .query_row(
+                    "SELECT COALESCE(SUM(amount), 0.0), COUNT(*) FROM transactions
+                     WHERE recipient_user_id = ?1 AND sender_user_id != ?1 AND status = 'approved'",
+                    params![user.user_id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap_or((0.0, 0));
+            let audit_logs = list_user_agent_audit_logs(&conn, user.user_id, 25)?;
+            let mut n_stmt = conn.prepare(
+                "SELECT id, notification_type, message, is_read, created_at
+                 FROM notifications WHERE to_user_id = ?1 ORDER BY created_at DESC LIMIT 20",
+            )?;
+            let notifications: Vec<Value> = n_stmt
+                .query_map(params![user.user_id], |r| {
+                    Ok(json!({
+                        "id": r.get::<_, String>(0)?,
+                        "type": r.get::<_, String>(1)?,
+                        "message": r.get::<_, String>(2)?,
+                        "is_read": r.get::<_, i64>(3)? != 0,
+                        "created_at": r.get::<_, String>(4)?,
+                    }))
+                })?
+                .filter_map(Result::ok)
+                .collect();
+            Ok(json!({
+                "profile": profile,
+                "gross_earnings": round_money(gross_earnings),
+                "net_earnings_85_pct": round_money(gross_earnings * 0.85),
+                "transactions_count": tx_count,
+                "notifications": notifications,
+                "agent_audit_logs": audit_logs
+            }))
+        }
+
+        other => Err(AppError::NotFound(format!("Unknown MCP tool: {other}"))),
+    }
+}

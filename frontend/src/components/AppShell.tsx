@@ -50,6 +50,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     },
     { href: '/my/bookmarks', label: 'Bookmarks', icon: '🔖' },
     { href: '/my/lists', label: 'Lists', icon: '📋' },
+    {
+      href: '/my/agents',
+      label: 'AI Agents & MCP',
+      icon: '🤖',
+      badgeLabel: 'MCP',
+    },
     { href: '/my/settings?tab=subscriptions', label: 'Subscriptions', icon: '💎' },
     {
       href: user ? `/${user.username}` : '/login',
@@ -61,10 +67,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const quickCommands = [
     { label: 'Go to Home Feed', href: '/feed', icon: '🏠', category: 'Navigation' },
     { label: 'Explore Creators & Posts', href: '/search', icon: '🧭', category: 'Navigation' },
-    { label: 'Direct Messages', href: '/my/messenger', icon: '💬', category: 'Navigation' },
+    { label: 'Direct Messages & Broadcasts', href: '/my/messenger', icon: '💬', category: 'Navigation' },
     { label: 'Notifications', href: '/my/notifications', icon: '🔔', category: 'Navigation' },
     { label: 'Reels Vertical Feed', href: '/reels', icon: '🎬', category: 'Navigation' },
     { label: 'Live Streams & Broadcast', href: '/my/streams', icon: '📡', category: 'Navigation' },
+    { label: 'Autonomous AI Agents & MCP Hub', href: '/my/agents', icon: '🤖', category: 'Autonomous AI & MCP' },
+    { label: 'Mint Scoped MCP Agent Token (hp_mcp_*)', href: '/my/agents?view=keys', icon: '🔑', category: 'Autonomous AI & MCP' },
+    { label: 'Interactive MCP Tool Console & JSON-RPC Runner', href: '/my/agents?view=playground', icon: '⚡', category: 'Autonomous AI & MCP' },
+    { label: 'Agent Spend Guardrails & Audit Log', href: '/my/agents?view=audit', icon: '🛡️', category: 'Autonomous AI & MCP' },
     { label: 'Media Vault', href: '/my/vault', icon: '🖼️', category: 'Creator Studio' },
     { label: 'Create New Post', href: '/posts/create', icon: '✍️', category: 'Creator Studio' },
     { label: 'Create 24h Story', href: '/stories/create', icon: '✨', category: 'Creator Studio' },
@@ -72,7 +82,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     { label: 'Saved Bookmarks', href: '/my/bookmarks', icon: '🔖', category: 'Library' },
     { label: 'Custom & Follower Lists', href: '/my/lists', icon: '📋', category: 'Library' },
     { label: 'Wallet & Deposit Funds', href: '/my/settings?tab=wallet', icon: '💳', category: 'Settings' },
-    { label: 'Creator Rates & Bundles', href: '/my/settings?tab=rates', icon: '💰', category: 'Settings' },
+    { label: 'Creator Rates, Bundles & Promo Offers', href: '/my/settings?tab=rates', icon: '💰', category: 'Settings' },
     { label: 'Identity Verification', href: '/my/settings?tab=verify', icon: '🪪', category: 'Settings' },
     { label: 'Privacy & Security', href: '/my/settings?tab=privacy', icon: '🔒', category: 'Settings' },
   ];

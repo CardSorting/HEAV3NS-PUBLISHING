@@ -27,7 +27,7 @@ New to **HEAV3NS-Publishing**? Jump straight to the guide designed for your pers
 | **🎨 Creators & Operators** | **[Creators & Operators Guide](./docs/onboarding/creators-and-operators.md)** | [Startup Playbook](./docs/playbooks/001-local-development-and-startup.md) · [Payout Reconciliation](./docs/playbooks/003-payment-and-payout-reconciliation.md) · [KYC & Moderation](./docs/playbooks/004-moderation-and-creator-verification.md) |
 | **🔬 Researchers & Auditors** | **[Researchers & Auditors Guide](./docs/onboarding/researchers-and-auditors.md)** | [Technical Whitepaper](./docs/papers/003-technical-whitepaper.md) · [Paywall & PII Invariants](./docs/adr/004-server-side-paywall-and-privacy-masking.md) · [Post-Mortems (`PM-001..004`)](./docs/README.md#5-engineering-post-mortems) |
 | **📊 Stakeholders & Execs** | **[Stakeholders & Executives Guide](./docs/onboarding/stakeholders-and-executives.md)** | [Stakeholder Handoff Dossier](./docs/papers/002-stakeholder-handoff.md) · [Philosophy Paper](./docs/papers/001-philosophy-paper.md) · [Domain Overview](./docs/knowledge-base/overview.md) |
-| **🤖 AI Agents & Engineers** | **[AI Agents & Contributors Guide](./docs/onboarding/agents-and-contributors.md)** | [System Architecture](./docs/architecture/system-architecture.md) · [23-Table Schema](./docs/architecture/database-schema.md) · [REST API Reference](./docs/api/api-reference.md) |
+| **🤖 AI Agents & Engineers** | **[AI Agents & Contributors Guide](./docs/onboarding/agents-and-contributors.md)** | [MCP & Agent Guardrails (ADR-006)](./docs/adr/006-model-context-protocol-and-autonomous-agent-guardrails.md) · [System Architecture](./docs/architecture/system-architecture.md) · [24-Table Schema](./docs/architecture/database-schema.md) · [REST & MCP API Reference](./docs/api/api-reference.md) |
 
 ---
 
@@ -51,11 +51,11 @@ We maintain three comprehensive papers in [`docs/papers/`](./docs/papers/) cover
 ./start-dev.sh
 ```
 This single command starts:
-- **Rust Axum API (`http://127.0.0.1:8080`)** — Automatically initializes the 23-table SQLite WAL database (`backend/justfans.sqlite`) and seeds demo creators, posts, reels, stories, streams, and wallets.
+- **Rust Axum API (`http://127.0.0.1:8080`)** — Automatically initializes the 24-table SQLite WAL database (`backend/justfans.sqlite`), exposes the **Model Context Protocol (MCP)** JSON-RPC 2.0 server (`/api/mcp`), and seeds demo creators, posts, reels, stories, streams, and wallets.
 - **Next.js 16 Turbopack UI (`http://127.0.0.1:3000`)** — Proxies `/api/*` and `/uploads/*` to the Rust backend.
 
 ### 3. Sign In & Explore (`⌘K`)
-Open **`http://localhost:3000`**, sign in with any demo account below (password: **`password123`**), and press **`⌘K`** (macOS) or **`Ctrl+K`** (Windows/Linux) to open the **Command Palette**:
+Open **`http://localhost:3000`**, sign in with any demo account below (password: **`password123`**), and press **`⌘K`** (macOS) or **`Ctrl+K`** (Windows/Linux) to open the **Command Palette** (or visit **`/my/agents`** for the Autonomous AI Agent & MCP Control Center):
 
 | Persona | Username | Email | Profile Mode | Seeded Wallet |
 | :--- | :--- | :--- | :--- | :--- |
@@ -71,35 +71,44 @@ Open **`http://localhost:3000`**, sign in with any demo account below (password:
 ```mermaid
 flowchart LR
     subgraph Client["Next.js 16.4.3 + React 19 (:3000)"]
-        UI["25 App Router Views\n+ ⌘K Command Palette"]
+        UI["26 App Router Views\n+ ⌘K Command Palette\n+ /my/agents MCP Console"]
         Proxy["next.config.mjs Proxy\n(/api/* & /uploads/*)"]
     end
 
+    subgraph Agents["Autonomous AI Agents"]
+        MCPClient["Claude / Cursor / Custom Bot\n(X-Agent-Token: hp_mcp_*)"]
+    end
+
     subgraph Backend["Rust Axum 0.7 API (:8080)"]
-        Auth["AuthUser / OptionalAuthUser\n(Bearer + HttpOnly JWT)"]
-        Engine["60+ Handlers & View Builders\n(Server Paywall & PII Redaction)"]
+        Auth["AuthUser / OptionalAuthUser\n(JWT + Scoped hp_mcp_* Tokens)"]
+        MCP["MCP 2024-11-05 Server (/api/mcp)\n26 Tools · 4 Resources · 3 Prompts"]
+        Engine["70+ Handlers & View Builders\n(Spend Caps, Paywall & PII Masking)"]
     end
 
     subgraph Storage["Embedded Persistence"]
-        DB[("SQLite 3 WAL\n23 Tables (BEGIN IMMEDIATE)")]
+        DB[("SQLite 3 WAL\n24 Tables (BEGIN IMMEDIATE)")]
         Vault[("Media Vault\nbackend/uploads/")]
     end
 
     UI --> Proxy --> Auth --> Engine
+    MCPClient --> Auth --> MCP --> Engine
     Engine --> DB
     Engine --> Vault
 ```
 
 | Workspace Path | Stack | Responsibility |
 | :--- | :--- | :--- |
-| **[`backend/`](./backend/)** | Rust 2021, Axum 0.7, Tokio, `rusqlite` (bundled SQLite WAL), Bcrypt, `jsonwebtoken` | 60+ REST endpoints, `BEGIN IMMEDIATE` ACID financial ledger, server-side paywall & PII masking, 8 integration test suites. |
-| **[`frontend/`](./frontend/)** | Next.js 16.4.3 (Turbopack), React 19.3.1, TypeScript 5.6, Bootstrap 5 | 25 App Router routes, global `⌘K` Command Palette, dark/light mode, Media Vault, Reels, Stories, HLS Live Streams, Messenger. |
-| **[`docs/`](./docs/README.md)** | Markdown + Mermaid + KaTeX | 3 Foundational Papers, 4 Role Onboarding Guides, Architecture & Schema Specs, 5 ADRs, 5 Operational Playbooks, 4 Post-Mortems. |
+| **[`backend/`](./backend/)** | Rust 2021, Axum 0.7, Tokio, `rusqlite` (bundled SQLite WAL), Bcrypt, `jsonwebtoken` | 70+ REST endpoints + **MCP 2024-11-05 JSON-RPC 2.0 server** (`/api/mcp`), scoped `hp_mcp_*` agent tokens with spend caps, `BEGIN IMMEDIATE` ACID financial ledger, 9 integration test suites. |
+| **[`frontend/`](./frontend/)** | Next.js 16.4.3 (Turbopack), React 19.3.1, TypeScript 5.6, Bootstrap 5 | 26 App Router routes including `/my/agents` (**Autonomous Agent & MCP Hub**), global `⌘K` Command Palette, dark/light mode, Media Vault, Reels, Stories, HLS Live Streams, Broadcast Messenger. |
+| **[`docs/`](./docs/README.md)** | Markdown + Mermaid + KaTeX | 3 Foundational Papers, 4 Role Onboarding Guides, Architecture & Schema Specs, 6 ADRs, 5 Operational Playbooks, 4 Post-Mortems. |
 
 ---
 
 ## ✨ Core Capabilities Summary
 
+- **🤖 Autonomous AI Agent & Model Context Protocol (MCP) Support ([ADR-006](./docs/adr/006-model-context-protocol-and-autonomous-agent-guardrails.md))**:
+  - Full **MCP 2024-11-05** JSON-RPC 2.0 server (`POST /api/mcp`), discovery manifest (`GET /api/mcp/manifest`), and REST tool bridge (`POST /api/mcp/tools/:tool_name`) with **26 tools**, **4 resources**, and **3 autonomous workflow prompts**.
+  - Agents can autonomously register an account (`account_register`), configure profile & subscription bundles (`profile_update`, `rates_and_offers_update`), publish posts/polls/reels/stories/streams, send broadcast DMs (`messenger_broadcast`), and transact within hardware-grade per-transaction (`max_spend_per_tx`) and 24-hour rolling (`daily_spend_limit`) spend caps.
 - **💰 6 Creator Revenue Streams (85% Creator / 15% Platform Split)**:
   - Multi-tier subscriptions (`1m`, `3m`, `6m`, `12m`), promotional discount campaigns (`creator_offers`), PPV posts (`post-unlock`), PPV vertical video reels (`reel-unlock`), PPV direct messages (`message-unlock`), VIP live stream tickets (`stream-unlock`), and direct tips.
 - **🔒 Cryptographic Paywall & Privacy Invariants**:
@@ -117,13 +126,13 @@ flowchart LR
 All three checks run in CI ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) and execute locally in seconds:
 
 ```bash
-# 1. Run all 8 end-to-end Rust integration & security test suites (< 0.15s)
+# 1. Run all 9 end-to-end Rust integration, MCP & security test suites (< 0.15s)
 cd backend && cargo test
 
 # 2. Run strict Clippy static analysis (0 warnings permitted)
 cd backend && cargo clippy --all-targets -- -D warnings
 
-# 3. Verify Next.js 16.4.3 TypeScript & production build (25 routes)
+# 3. Verify Next.js 16.4.3 TypeScript & production build (26 routes)
 cd frontend && npm run build
 ```
 
@@ -135,8 +144,8 @@ Explore the full **[Documentation & Knowledge Base Hub (`docs/README.md`)](./doc
 
 - **Foundational Papers**: [Philosophy Paper](./docs/papers/001-philosophy-paper.md) · [Stakeholder Handoff](./docs/papers/002-stakeholder-handoff.md) · [Technical Whitepaper](./docs/papers/003-technical-whitepaper.md)
 - **Role Onboarding**: [Creators & Operators](./docs/onboarding/creators-and-operators.md) · [Researchers & Auditors](./docs/onboarding/researchers-and-auditors.md) · [Stakeholders & Execs](./docs/onboarding/stakeholders-and-executives.md) · [AI Agents & Contributors](./docs/onboarding/agents-and-contributors.md)
-- **Specs & References**: [Domain Knowledge Base](./docs/knowledge-base/overview.md) · [System Architecture](./docs/architecture/system-architecture.md) · [Database Schema (23 Tables)](./docs/architecture/database-schema.md) · [REST API Reference (60+ Routes)](./docs/api/api-reference.md)
-- **Architecture Decision Records**: [ADR-001](./docs/adr/001-rust-axum-and-nextjs-migration.md) · [ADR-002](./docs/adr/002-sqlite-wal-and-state-management.md) · [ADR-003](./docs/adr/003-dual-channel-jwt-authentication.md) · [ADR-004](./docs/adr/004-server-side-paywall-and-privacy-masking.md) · [ADR-005](./docs/adr/005-unified-payment-ledger-and-creator-split.md)
+- **Specs & References**: [Domain Knowledge Base](./docs/knowledge-base/overview.md) · [System Architecture](./docs/architecture/system-architecture.md) · [Database Schema (24 Tables)](./docs/architecture/database-schema.md) · [REST & MCP API Reference (70+ Routes)](./docs/api/api-reference.md)
+- **Architecture Decision Records**: [ADR-001](./docs/adr/001-rust-axum-and-nextjs-migration.md) · [ADR-002](./docs/adr/002-sqlite-wal-and-state-management.md) · [ADR-003](./docs/adr/003-dual-channel-jwt-authentication.md) · [ADR-004](./docs/adr/004-server-side-paywall-and-privacy-masking.md) · [ADR-005](./docs/adr/005-unified-payment-ledger-and-creator-split.md) · [ADR-006 (MCP & Autonomous Agent Guardrails)](./docs/adr/006-model-context-protocol-and-autonomous-agent-guardrails.md)
 - **Operational Playbooks**: [PB-001 Startup](./docs/playbooks/001-local-development-and-startup.md) · [PB-002 DB Backup/Restore](./docs/playbooks/002-database-backup-restore-and-seeding.md) · [PB-003 Payout Reconciliation](./docs/playbooks/003-payment-and-payout-reconciliation.md) · [PB-004 KYC & Moderation](./docs/playbooks/004-moderation-and-creator-verification.md) · [PB-005 Security Audit](./docs/playbooks/005-security-incident-and-paywall-audit.md)
 - **Engineering Post-Mortems**: [PM-001 Price Spoofing & Double-Charge](./docs/post-mortems/001-subscription-price-spoofing-and-ppv-double-charge.md) · [PM-002 Paywall & PII Leak](./docs/post-mortems/002-locked-post-and-stream-paywall-data-leak.md) · [PM-003 Poll & Vault Integrity](./docs/post-mortems/003-poll-vote-corruption-and-attachment-duplication.md) · [PM-004 Contract & Pagination Fixes](./docs/post-mortems/004-frontend-backend-contract-and-pagination-mismatches.md)
 - **Open-Source Community**: [Contributing (`CONTRIBUTING.md`)](./CONTRIBUTING.md) · [Security Policy (`SECURITY.md`)](./SECURITY.md) · [Code of Conduct (`CODE_OF_CONDUCT.md`)](./CODE_OF_CONDUCT.md) · [Changelog (`CHANGELOG.md`)](./CHANGELOG.md) · [Support (`SUPPORT.md`)](./SUPPORT.md) · [MIT License (`LICENSE`)](./LICENSE)

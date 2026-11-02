@@ -90,6 +90,53 @@ pub struct UserPublicProfile {
     pub postcode: Option<String>,
     pub referral_code: String,
     pub created_at: String,
+    #[serde(default)]
+    pub creator_offer: Option<CreatorOfferView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreatorOfferView {
+    pub id: i64,
+    pub user_id: i64,
+    pub old_profile_access_price: f64,
+    pub old_profile_access_price_3_months: f64,
+    pub old_profile_access_price_6_months: f64,
+    pub old_profile_access_price_12_months: f64,
+    pub discount_percent: i64,
+    pub expires_at: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentTokenView {
+    pub id: i64,
+    pub user_id: i64,
+    pub name: String,
+    pub token_prefix: String,
+    pub scopes: Vec<String>,
+    pub max_spend_per_tx: f64,
+    pub daily_spend_limit: f64,
+    pub spent_today: f64,
+    pub spent_last_24h: f64,
+    pub is_active: bool,
+    pub last_used_at: Option<String>,
+    pub expires_at: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentAuditLogView {
+    pub id: i64,
+    pub user_id: i64,
+    pub agent_token_id: Option<i64>,
+    pub agent_name: Option<String>,
+    pub tool_name: String,
+    pub resource_type: String,
+    pub resource_id: Option<String>,
+    pub status: String,
+    pub amount_spent: f64,
+    pub details: String,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

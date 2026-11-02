@@ -28,6 +28,11 @@ function MessengerContent() {
   const [mobileShowThread, setMobileShowThread] = useState(Boolean(initialContactId));
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [broadcastOpen, setBroadcastOpen] = useState(false);
+  const [broadcastMessage, setBroadcastMessage] = useState('');
+  const [broadcastAudience, setBroadcastAudience] = useState<'subscribers' | 'followers' | 'all'>('subscribers');
+  const [broadcastPrice, setBroadcastPrice] = useState('0');
+  const [broadcastSuccess, setBroadcastSuccess] = useState<string | null>(null);
 
   const loadContacts = async () => {
     try {
@@ -195,6 +200,34 @@ function MessengerContent() {
     }
   };
 
+  const handleSendBroadcast = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!broadcastMessage.trim()) return;
+    setBusy(true);
+    setFeedback(null);
+    setBroadcastSuccess(null);
+    try {
+      const res = await apiFetch('/api/messenger/broadcast', {
+        method: 'POST',
+        body: JSON.stringify({
+          message: broadcastMessage.trim(),
+          audience: broadcastAudience,
+          price: parseFloat(broadcastPrice) || 0,
+        }),
+      });
+      setBroadcastSuccess(res.message || `Delivered to ${res.sent_count} fans!`);
+      setBroadcastMessage('');
+      setBroadcastPrice('0');
+      setBroadcastOpen(false);
+      loadContacts();
+      if (selectedUserId) loadConversation(selectedUserId);
+    } catch (err: any) {
+      setFeedback(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const filteredContacts = contacts.filter(
     (c) =>
       c.name.toLowerCase().includes(searchFilter.toLowerCase()) ||
@@ -212,7 +245,64 @@ function MessengerContent() {
         }`}
       >
         <div className="p-3 border-bottom">
-          <h5 className="fw-bold mb-2">Messages</h5>
+          <div className="d-flex justify-content-between align-items-center mb-2">
+            <h5 className="fw-bold mb-0">Messages</h5>
+            <button
+              type="button"
+              onClick={() => setBroadcastOpen((v) => !v)}
+              className="btn btn-sm btn-outline-primary rounded-pill px-3 fw-semibold"
+              title="Send mass broadcast DM to subscribers or followers"
+            >
+              📢 Broadcast
+            </button>
+          </div>
+          {broadcastSuccess && (
+            <div className="alert alert-success py-1 px-2 small mb-2">{broadcastSuccess}</div>
+          )}
+          {broadcastOpen && (
+            <form onSubmit={handleSendBroadcast} className="p-2 mb-2 rounded-3 border bg-body-tertiary">
+              <div className="fw-bold small mb-1">📢 Mass Broadcast DM</div>
+              <textarea
+                rows={2}
+                value={broadcastMessage}
+                onChange={(e) => setBroadcastMessage(e.target.value)}
+                placeholder="Write a message to all subscribers or followers..."
+                className="form-control form-control-sm mb-2"
+                required
+              />
+              <div className="row g-1 mb-2">
+                <div className="col-7">
+                  <select
+                    value={broadcastAudience}
+                    onChange={(e) => setBroadcastAudience(e.target.value as any)}
+                    className="form-select form-select-sm"
+                  >
+                    <option value="subscribers">Active Subscribers</option>
+                    <option value="followers">Followers</option>
+                    <option value="all">Subscribers + Followers</option>
+                  </select>
+                </div>
+                <div className="col-5">
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.5"
+                    value={broadcastPrice}
+                    onChange={(e) => setBroadcastPrice(e.target.value)}
+                    placeholder="PPV $"
+                    className="form-control form-control-sm"
+                  />
+                </div>
+              </div>
+              <button
+                type="submit"
+                disabled={busy}
+                className="btn btn-sm btn-primary w-100 rounded-pill fw-bold"
+              >
+                {busy ? 'Sending...' : 'Send Broadcast Campaign'}
+              </button>
+            </form>
+          )}
           <input
             type="search"
             value={searchFilter}

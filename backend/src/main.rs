@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod db;
 pub mod handlers;
+pub mod mcp;
 pub mod models;
 
 use axum::{
@@ -32,6 +33,7 @@ pub fn build_app(state: AppState) -> Router {
             header::AUTHORIZATION,
             header::ACCEPT,
             header::COOKIE,
+            header::HeaderName::from_static("x-agent-token"),
         ])
         .allow_credentials(true);
 
@@ -77,14 +79,16 @@ pub fn build_app(state: AppState) -> Router {
                 .delete(handlers::delete_list),
         )
         .route("/lists/:list_id/clear", post(handlers::clear_list))
-        // Messenger
+        // Messenger & Broadcasts
         .route("/messenger/contacts", get(handlers::get_messenger_contacts))
         .route("/messenger/messages/:user_id", get(handlers::get_messages_with_user))
         .route("/messenger/send", post(handlers::send_message))
+        .route("/messenger/broadcast", post(handlers::broadcast_message))
         .route("/messenger/pin/:message_id", post(handlers::toggle_pin_message))
         .route("/messenger/message/:message_id", delete(handlers::delete_message))
-        // Notifications
+        // Notifications & Analytics
         .route("/notifications", get(handlers::get_notifications))
+        .route("/analytics/overview", get(handlers::get_creator_analytics))
         // Payments, Subscriptions, Invoices & Withdrawals
         .route("/payments/initiate", post(handlers::initiate_payment))
         .route("/invoices/:id", get(handlers::get_invoice_detail))
@@ -97,6 +101,16 @@ pub fn build_app(state: AppState) -> Router {
         .route("/settings/account", post(handlers::update_account_settings))
         .route("/settings/privacy", post(handlers::update_privacy_settings))
         .route("/settings/verify", post(handlers::submit_verification_request))
+        // Agent Tokens & Model Context Protocol (MCP)
+        .route(
+            "/agent/tokens",
+            get(handlers::get_agent_tokens).post(handlers::create_agent_token),
+        )
+        .route("/agent/tokens/:token_id", delete(handlers::delete_agent_token))
+        .route("/agent/tokens/:token_id/revoke", post(handlers::revoke_agent_token))
+        .route("/mcp", post(mcp::handle_mcp_rpc).get(mcp::get_mcp_manifest))
+        .route("/mcp/manifest", get(mcp::get_mcp_manifest))
+        .route("/mcp/tools/:tool_name", post(mcp::call_mcp_tool_rest))
         // Media Vault & Uploads
         .route("/vault", get(handlers::get_vault_items))
         .route("/vault/:att_id", delete(handlers::delete_vault_item))
@@ -1852,6 +1866,633 @@ mod tests {
         assert!(
             public_aria["creator"]["billing_address"].is_null(),
             "Public profile must mask billing_address PII from non-owners"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_mcp_autonomous_agent_lifecycle_and_guardrails() {
+        let app = setup_test_app();
+
+        // 1. Discover MCP Manifest (`GET /api/mcp/manifest`)
+        let manifest_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/mcp/manifest")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(manifest_resp.status(), StatusCode::OK);
+        let manifest = body_json(manifest_resp).await;
+        assert_eq!(
+            manifest["serverInfo"]["name"],
+            "heav3ns-publishing-mcp-server"
+        );
+        assert!(manifest["tools"].as_array().unwrap().len() >= 25);
+
+        // 2. JSON-RPC 2.0 `initialize`, `tools/list`, `resources/list`, `prompts/list`
+        let init_rpc = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/mcp")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "jsonrpc": "2.0",
+                                "id": 1,
+                                "method": "initialize",
+                                "params": {}
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(init_rpc["result"]["protocolVersion"], "2024-11-05");
+
+        let tools_rpc = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/mcp")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "jsonrpc": "2.0",
+                                "id": 2,
+                                "method": "tools/list"
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert!(tools_rpc["result"]["tools"].as_array().unwrap().len() >= 25);
+
+        // 3. Autonomous Agent creates an account end-to-end via MCP `tools/call` (`account_register`)
+        let reg_rpc = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/mcp")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "jsonrpc": "2.0",
+                                "id": 3,
+                                "method": "tools/call",
+                                "params": {
+                                    "name": "account_register",
+                                    "arguments": {
+                                        "name": "Nova Synth Agent",
+                                        "username": "novasynth",
+                                        "email": "nova@heav3ns.com",
+                                        "password": "AutonomousPassword123!",
+                                        "agent_name": "Nova Primary Agent",
+                                        "max_spend_per_tx": 20.0,
+                                        "daily_spend_limit": 35.0
+                                    }
+                                }
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(reg_rpc["result"]["isError"], false);
+        let nova_agent_token = reg_rpc["result"]["structuredContent"]["agent_token"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let nova_jwt = reg_rpc["result"]["structuredContent"]["jwt_token"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(nova_agent_token.starts_with("hp_mcp_"));
+
+        // 4. Verify agent token authenticates via `X-Agent-Token` on both REST and MCP endpoints
+        let whoami_rest = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/mcp/tools/account_whoami")
+                        .header("x-agent-token", &nova_agent_token)
+                        .header("content-type", "application/json")
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(whoami_rest["result"]["user"]["username"], "novasynth");
+        assert!(whoami_rest["result"]["agent_token_id"].as_i64().is_some());
+        assert_eq!(whoami_rest["result"]["max_spend_per_tx"], 20.0);
+        assert_eq!(whoami_rest["result"]["daily_spend_limit"], 35.0);
+
+        // 5. Autonomous agent configures profile, rates + promotional offer, and publishes content via MCP
+        let profile_update = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/mcp/tools/profile_update")
+                        .header("x-agent-token", &nova_agent_token)
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "name": "Nova Synth AI",
+                                "bio": "Autonomous AI music & visual creator powered by MCP",
+                                "location": "Neo-Tokyo",
+                                "open_profile": true
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(profile_update["success"], true);
+
+        let rates_update = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/mcp/tools/rates_and_offers_update")
+                        .header("x-agent-token", &nova_agent_token)
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "profile_access_price": 12.99,
+                                "profile_access_price_3_months": 33.0,
+                                "profile_access_price_6_months": 60.0,
+                                "profile_access_price_12_months": 108.0,
+                                "is_offer_active": true,
+                                "offer_discount_percent": 30,
+                                "offer_expires_at": "2099-12-31 23:59:59"
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(rates_update["success"], true);
+
+        // Verify public profile exposes the active promotional creator_offer
+        let nova_public = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/profile/novasynth")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            nova_public["profile"]["creator_offer"]["discount_percent"],
+            30
+        );
+
+        // Publish a post with a poll via MCP
+        let post_created = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/mcp/tools/post_create_or_update")
+                        .header("x-agent-token", &nova_agent_token)
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "text": "Hello from my autonomous MCP agent! Which synth pack should I drop next?",
+                                "price": 0.0,
+                                "is_pinned": true,
+                                "poll_answers": ["Modular Ambient", "Cyberpunk Bass"]
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(post_created["success"], true);
+        let created_post_id = post_created["result"]["post"]["id"].as_i64().unwrap();
+        assert!(created_post_id > 0);
+
+        // 6. Test Autonomous Spend Guardrails (`max_spend_per_tx` = $20, `daily_spend_limit` = $35)
+        // First deposit $100 into Nova's wallet (deposits are credit additions, allowed)
+        let deposit_resp = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/mcp/tools/wallet_transact")
+                        .header("x-agent-token", &nova_agent_token)
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "payment_type": "deposit",
+                                "amount": 100.0,
+                                "provider": "credit"
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(deposit_resp["success"], true);
+        assert_eq!(deposit_resp["result"]["wallet_balance"], 200.0); // $100 welcome + $100 deposit
+
+        // Attempt a $25 tip to Aria (`user_id = 1`) — MUST FAIL because max_spend_per_tx is $20
+        let over_tx_cap = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/payments/initiate")
+                    .header("x-agent-token", &nova_agent_token)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "recipient_user_id": 1,
+                            "payment_type": "tip",
+                            "amount": 25.0,
+                            "provider": "wallet"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            over_tx_cap.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Spend exceeding max_spend_per_tx ($20) must be blocked with 422"
+        );
+
+        // Two $15 tips succeed ($15 <= $20 per-tx cap, total $30 <= $35 daily cap)
+        for _ in 0..2 {
+            let ok_tip = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/payments/initiate")
+                        .header("x-agent-token", &nova_agent_token)
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "recipient_user_id": 1,
+                                "payment_type": "tip",
+                                "amount": 15.0,
+                                "provider": "wallet"
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(ok_tip.status(), StatusCode::OK);
+        }
+
+        // Third $10 tip MUST FAIL because 24h rolling spend ($30 + $10 = $40) exceeds daily_spend_limit ($35)
+        let over_daily_cap = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/payments/initiate")
+                    .header("x-agent-token", &nova_agent_token)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "recipient_user_id": 1,
+                            "payment_type": "tip",
+                            "amount": 10.0,
+                            "provider": "wallet"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            over_daily_cap.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Spend exceeding daily_spend_limit ($35) must be blocked with 422"
+        );
+
+        // 7. Test Scoped Agent Token Enforcement (read-only token cannot publish or spend)
+        // First verify a non-admin agent token cannot self-escalate by minting another token
+        let self_mint_attempt = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/agent/tokens")
+                    .header("x-agent-token", &nova_agent_token)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "name": "Unauthorized Self-Minted Token",
+                            "scopes": ["read", "write"]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            self_mint_attempt.status(),
+            StatusCode::FORBIDDEN,
+            "Non-admin agent token must not be allowed to mint new agent tokens"
+        );
+
+        let create_ro_token = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/agent/tokens")
+                        .header("authorization", format!("Bearer {nova_jwt}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "name": "Read-Only Analytics Observer",
+                                "scopes": ["read"]
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        let ro_raw_token = create_ro_token["agent_token"].as_str().unwrap().to_string();
+        let ro_token_id = create_ro_token["token_id"].as_i64().unwrap();
+
+        // Read-only token CAN read analytics
+        let ro_analytics = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/analytics/overview")
+                    .header("x-agent-token", &ro_raw_token)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(ro_analytics.status(), StatusCode::OK);
+
+        // Read-only token CANNOT publish a post via MCP or legacy REST (403 Forbidden)
+        let ro_write_attempt = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/mcp/tools/post_create_or_update")
+                    .header("x-agent-token", &ro_raw_token)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "text": "Unauthorized write attempt"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            ro_write_attempt.status(),
+            StatusCode::FORBIDDEN,
+            "Read-only agent token must be rejected with 403 on write tools"
+        );
+
+        let ro_rest_post_save = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/posts/save")
+                    .header("x-agent-token", &ro_raw_token)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "text": "Unauthorized legacy REST post save"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            ro_rest_post_save.status(),
+            StatusCode::FORBIDDEN,
+            "Read-only agent token must be rejected with 403 on legacy REST POST /api/posts/save"
+        );
+
+        let ro_rest_dm = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/messenger/send")
+                    .header("x-agent-token", &ro_raw_token)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "receiver_id": 1,
+                            "message": "Unauthorized legacy REST DM"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            ro_rest_dm.status(),
+            StatusCode::FORBIDDEN,
+            "Read-only agent token must be rejected with 403 on legacy REST POST /api/messenger/send"
+        );
+
+        // Verify GET /api/agent/tokens returns both `spent_last_24h` and `spent_today`
+        let tokens_list_json = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/agent/tokens")
+                        .header("x-agent-token", &ro_raw_token)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(tokens_list_json["success"], true);
+        let first_tok = &tokens_list_json["agent_tokens"][0];
+        assert!(
+            first_tok.get("spent_last_24h").is_some() && first_tok.get("spent_today").is_some(),
+            "AgentTokenView must serialize both spent_last_24h and spent_today"
+        );
+
+        // Verify MCP `post_react` supports `reel_id` in addition to `post_id`
+        let reel_react_res = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/mcp/tools/post_react")
+                        .header("x-agent-token", &nova_agent_token)
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "reel_id": 1
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(reel_react_res["success"], true);
+        assert_eq!(reel_react_res["result"]["reel_id"], 1);
+        assert_eq!(reel_react_res["result"]["liked"], true);
+
+        // 8. Test Broadcast Messaging by Aria (`user_id = 1`) to active subscribers & followers
+        let aria_login = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/auth/login")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            r#"{"email":"aria@justfans.local","password":"password123"}"#,
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        let aria_jwt = aria_login["token"].as_str().unwrap();
+
+        let broadcast_res = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/messenger/broadcast")
+                        .header("authorization", format!("Bearer {aria_jwt}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "message": "VIP drop live now for all subscribers & followers!",
+                                "audience": "all",
+                                "price": 5.0
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(broadcast_res["success"], true);
+        assert!(broadcast_res["sent_count"].as_u64().unwrap() >= 1);
+
+        // Non-admin agent token cannot revoke a DIFFERENT token (`ro_token_id`)
+        let unauthorized_other_revoke = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/agent/tokens/{ro_token_id}/revoke"))
+                    .header("x-agent-token", &nova_agent_token)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            unauthorized_other_revoke.status(),
+            StatusCode::FORBIDDEN,
+            "Non-admin agent token must not be able to revoke another token"
+        );
+
+        // 9. Revoke the read-only token via session JWT (or self-revocation) and verify immediate 401 Unauthorized
+        let revoke_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/agent/tokens/{ro_token_id}/revoke"))
+                    .header("authorization", format!("Bearer {nova_jwt}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(revoke_resp.status(), StatusCode::OK);
+
+        let revoked_use = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/auth/me")
+                    .header("x-agent-token", &ro_raw_token)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            revoked_use.status(),
+            StatusCode::UNAUTHORIZED,
+            "Revoked agent token must be rejected immediately with 401"
         );
     }
 }

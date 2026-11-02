@@ -522,6 +522,7 @@ pub async fn save_post(
     auth: AuthUser,
     Json(payload): Json<SavePostPayload>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("write")?;
     let text = payload.text.trim();
     let attachment_inputs = payload.attachments.clone().unwrap_or_default();
 
@@ -670,6 +671,7 @@ pub async fn delete_post(
     auth: AuthUser,
     Path(post_id): Path<i64>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("write")?;
     let conn = state.lock_db();
     let owner_id: i64 = conn.query_row(
         "SELECT user_id FROM posts WHERE id = ?1",
@@ -698,6 +700,7 @@ pub async fn toggle_reaction(
     auth: AuthUser,
     Json(payload): Json<ReactPayload>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("engage")?;
     let conn = state.lock_db();
 
     if let Some(pid) = payload.post_id {
@@ -837,6 +840,7 @@ pub async fn toggle_bookmark(
     auth: AuthUser,
     Json(payload): Json<BookmarkPayload>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("engage")?;
     let conn = state.lock_db();
 
     if let Some(pid) = payload.post_id {
@@ -904,6 +908,7 @@ pub async fn toggle_pin_post(
     auth: AuthUser,
     Json(payload): Json<PinPostPayload>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("write")?;
     let conn = state.lock_db();
     let (owner_id, current_pin): (i64, i64) = conn.query_row(
         "SELECT user_id, is_pinned FROM posts WHERE id = ?1",
@@ -935,6 +940,7 @@ pub async fn add_comment(
     auth: AuthUser,
     Json(payload): Json<AddCommentPayload>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("engage")?;
     let msg = payload.message.trim();
     if msg.is_empty() {
         return Err(AppError::Unprocessable("Comment cannot be empty.".into()));
@@ -1012,6 +1018,7 @@ pub async fn edit_comment(
     Path(comment_id): Path<i64>,
     Json(payload): Json<EditCommentPayload>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("engage")?;
     let msg = payload.message.trim();
     if msg.is_empty() {
         return Err(AppError::Unprocessable("Comment cannot be empty.".into()));
@@ -1040,6 +1047,7 @@ pub async fn delete_comment(
     auth: AuthUser,
     Path(comment_id): Path<i64>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("engage")?;
     let conn = state.lock_db();
     let (owner_id, post_author_id): (i64, i64) = conn.query_row(
         "SELECT c.user_id, p.user_id FROM post_comments c JOIN posts p ON c.post_id = p.id WHERE c.id = ?1",
@@ -1064,6 +1072,7 @@ pub async fn vote_poll(
     auth: AuthUser,
     Json(payload): Json<PollVotePayload>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("engage")?;
     let conn = state.lock_db();
     let post_id: i64 = conn.query_row(
         "SELECT post_id FROM polls WHERE id = ?1",
@@ -1480,6 +1489,7 @@ pub async fn get_bookmarks(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("read")?;
     let conn = state.lock_db();
     let mut stmt = conn.prepare(
         "SELECT post_id FROM user_bookmarks WHERE user_id = ?1 AND post_id IS NOT NULL ORDER BY id DESC",
@@ -1570,6 +1580,7 @@ pub async fn get_lists(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("read")?;
     let conn = state.lock_db();
     let mut stmt = conn.prepare(
         "SELECT id, user_id, name, list_type, created_at FROM user_lists WHERE user_id = ?1 ORDER BY id ASC",
@@ -1615,6 +1626,7 @@ pub async fn get_list_detail(
     auth: AuthUser,
     Path(list_id): Path<i64>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("read")?;
     let conn = state.lock_db();
     let list = conn.query_row(
         "SELECT id, user_id, name, list_type, created_at FROM user_lists WHERE id = ?1 AND user_id = ?2",
@@ -1664,6 +1676,7 @@ pub async fn save_list(
     auth: AuthUser,
     Json(payload): Json<SaveListPayload>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("engage")?;
     let name = payload.name.trim();
     if name.is_empty() {
         return Err(AppError::Unprocessable("List name is required.".into()));
@@ -1699,6 +1712,7 @@ pub async fn rename_list(
     Path(list_id): Path<i64>,
     Json(payload): Json<SaveListPayload>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("engage")?;
     let name = payload.name.trim();
     if name.is_empty() {
         return Err(AppError::Unprocessable("List name is required.".into()));
@@ -1722,6 +1736,7 @@ pub async fn clear_list(
     auth: AuthUser,
     Path(list_id): Path<i64>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("engage")?;
     let conn = state.lock_db();
     let (owner_id, list_type): (i64, String) = conn.query_row(
         "SELECT user_id, list_type FROM user_lists WHERE id = ?1",
@@ -1754,6 +1769,7 @@ pub async fn delete_list(
     auth: AuthUser,
     Path(list_id): Path<i64>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("engage")?;
     let conn = state.lock_db();
     conn.execute(
         "DELETE FROM user_lists WHERE id = ?1 AND user_id = ?2 AND list_type = 'custom'",
@@ -1773,6 +1789,7 @@ pub async fn toggle_list_member(
     auth: AuthUser,
     Json(payload): Json<ListMemberPayload>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("engage")?;
     let conn = state.lock_db();
     let (owner, list_type): (i64, String) = conn.query_row(
         "SELECT user_id, list_type FROM user_lists WHERE id = ?1",
@@ -1836,6 +1853,7 @@ pub async fn toggle_follow(
     auth: AuthUser,
     Json(payload): Json<FollowPayload>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("engage")?;
     if payload.target_user_id == auth.user_id {
         return Err(AppError::Unprocessable("Cannot follow yourself.".into()));
     }
@@ -1894,6 +1912,7 @@ pub async fn toggle_block_user(
     auth: AuthUser,
     Json(payload): Json<FollowPayload>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("engage")?;
     if payload.target_user_id == auth.user_id {
         return Err(AppError::Unprocessable("Cannot block yourself.".into()));
     }
@@ -1946,6 +1965,7 @@ pub async fn get_messenger_contacts(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("messages")?;
     let conn = state.lock_db();
     let mut stmt = conn.prepare(
         "SELECT DISTINCT CASE WHEN sender_id = ?1 THEN receiver_id ELSE sender_id END AS contact_id
@@ -2053,6 +2073,7 @@ pub async fn get_messages_with_user(
     auth: AuthUser,
     Path(other_user_id): Path<i64>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("messages")?;
     let conn = state.lock_db();
 
     if is_blocked_between(&conn, auth.user_id, other_user_id) {
@@ -2145,6 +2166,7 @@ pub async fn send_message(
     auth: AuthUser,
     Json(payload): Json<SendMessagePayload>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("messages")?;
     if payload.receiver_id == auth.user_id {
         return Err(AppError::Unprocessable("Cannot send a message to yourself.".into()));
     }
@@ -2235,6 +2257,7 @@ pub async fn toggle_pin_message(
     auth: AuthUser,
     Path(message_id): Path<i64>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("messages")?;
     let conn = state.lock_db();
     let (sender_id, receiver_id, current_pin): (i64, i64, i64) = conn.query_row(
         "SELECT sender_id, receiver_id, is_pinned FROM user_messages WHERE id = ?1",
@@ -2260,6 +2283,7 @@ pub async fn delete_message(
     auth: AuthUser,
     Path(message_id): Path<i64>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("messages")?;
     let conn = state.lock_db();
     let sender_id: i64 = conn.query_row(
         "SELECT sender_id FROM user_messages WHERE id = ?1",
@@ -2303,6 +2327,7 @@ pub async fn get_notifications(
     auth: AuthUser,
     Query(q): Query<NotificationsQuery>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("read")?;
     let conn = state.lock_db();
     let filter = q.filter.unwrap_or_default();
 
@@ -2369,6 +2394,7 @@ pub async fn initiate_payment(
     auth: AuthUser,
     Json(payload): Json<InitiatePaymentPayload>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("wallet")?;
     let mut conn = state.lock_db();
     let raw_provider = payload
         .provider
@@ -2582,6 +2608,33 @@ pub async fn initiate_payment(
     }
 
     let amount = round_money(raw_amount);
+
+    // Enforce Autonomous Agent spend guardrails if authenticated via MCP Agent Token
+    if let Some(tid) = auth.agent_token_id {
+        if let Some(max_tx) = auth.max_spend_per_tx {
+            if amount > max_tx {
+                return Err(AppError::Unprocessable(format!(
+                    "Autonomous agent payment (${amount:.2}) exceeds per-transaction spend cap (${max_tx:.2})."
+                )));
+            }
+        }
+        if let Some(daily_lim) = auth.daily_spend_limit {
+            let spent_today: f64 = conn
+                .query_row(
+                    "SELECT COALESCE(SUM(amount_spent), 0.0) FROM agent_audit_logs
+                     WHERE agent_token_id = ?1 AND status = 'success' AND created_at >= datetime('now', '-24 hours')",
+                    params![tid],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0.0);
+            if spent_today + amount > daily_lim {
+                return Err(AppError::Unprocessable(format!(
+                    "Autonomous agent payment (${amount:.2}) would exceed 24h daily spend cap (${daily_lim:.2}; ${spent_today:.2} already spent)."
+                )));
+            }
+        }
+    }
+
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
 
     // Deduct from wallet if using credit
@@ -2654,6 +2707,21 @@ pub async fn initiate_payment(
         )?;
     }
 
+    if let Some(tid) = auth.agent_token_id {
+        let _ = tx.execute(
+            "INSERT INTO agent_audit_logs (user_id, agent_token_id, tool_name, resource_type, resource_id, status, amount_spent, details)
+             VALUES (?1, ?2, ?3, 'payment', ?4, 'success', ?5, ?6)",
+            params![
+                auth.user_id,
+                tid,
+                format!("payment.{ptype}"),
+                next_invoice_id.to_string(),
+                amount,
+                json!({ "payment_type": ptype, "recipient_user_id": recipient_id, "amount": amount }).to_string()
+            ],
+        );
+    }
+
     // Send notification to creator
     if recipient_id != auth.user_id {
         let notif_msg = match ptype {
@@ -2691,6 +2759,8 @@ pub async fn initiate_payment(
     Ok(Json(json!({
         "success": true,
         "message": "Payment processed successfully!",
+        "invoice_id": next_invoice_id,
+        "amount": amount,
         "wallet_balance": round_money(updated_balance)
     })))
 }
@@ -2700,6 +2770,7 @@ pub async fn cancel_subscription(
     auth: AuthUser,
     Path(sub_id): Path<i64>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("wallet")?;
     let conn = state.lock_db();
     conn.execute(
         "UPDATE subscriptions SET status = 'canceled' WHERE id = ?1 AND (sender_user_id = ?2 OR recipient_user_id = ?2)",
@@ -2724,6 +2795,7 @@ pub async fn request_withdrawal(
     auth: AuthUser,
     Json(payload): Json<WithdrawalRequestPayload>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("wallet")?;
     let amount = round_money(payload.amount);
     if amount < 20.0 || !amount.is_finite() {
         return Err(AppError::Unprocessable(
@@ -2785,6 +2857,7 @@ pub async fn get_settings_data(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("read")?;
     let conn = state.lock_db();
     let profile = get_user_public_profile(&conn, auth.user_id, Some(auth.user_id))?;
 
@@ -2935,6 +3008,9 @@ pub async fn get_settings_data(
         .filter_map(Result::ok)
         .collect();
 
+    let agent_tokens = list_user_agent_tokens(&conn, auth.user_id)?;
+    let agent_audit_logs = list_user_agent_audit_logs(&conn, auth.user_id, 50)?;
+
     Ok(Json(json!({
         "success": true,
         "profile": profile,
@@ -2943,8 +3019,86 @@ pub async fn get_settings_data(
         "withdrawals": withdrawals,
         "verification": verification,
         "billing": billing,
-        "referrals": referrals
+        "referrals": referrals,
+        "agent_tokens": agent_tokens,
+        "agent_audit_logs": agent_audit_logs
     })))
+}
+
+pub fn list_user_agent_tokens(
+    conn: &rusqlite::Connection,
+    user_id: i64,
+) -> Result<Vec<AgentTokenView>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, user_id, name, token_prefix, scopes, max_spend_per_tx, daily_spend_limit, is_active, last_used_at, expires_at, created_at
+         FROM agent_tokens WHERE user_id = ?1 ORDER BY id DESC",
+    )?;
+    let rows = stmt
+        .query_map(params![user_id], |r| {
+            let tid: i64 = r.get(0)?;
+            let scopes_raw: String = r.get(4)?;
+            let scopes: Vec<String> = serde_json::from_str(&scopes_raw).unwrap_or_default();
+            let spent_today: f64 = conn
+                .query_row(
+                    "SELECT COALESCE(SUM(amount_spent), 0.0) FROM agent_audit_logs
+                     WHERE agent_token_id = ?1 AND status = 'success' AND created_at >= datetime('now', '-24 hours')",
+                    params![tid],
+                    |sr| sr.get(0),
+                )
+                .unwrap_or(0.0);
+            let rounded_spent = round_money(spent_today);
+            Ok(AgentTokenView {
+                id: tid,
+                user_id: r.get(1)?,
+                name: r.get(2)?,
+                token_prefix: r.get(3)?,
+                scopes,
+                max_spend_per_tx: r.get(5)?,
+                daily_spend_limit: r.get(6)?,
+                spent_today: rounded_spent,
+                spent_last_24h: rounded_spent,
+                is_active: r.get::<_, i64>(7)? != 0,
+                last_used_at: r.get(8)?,
+                expires_at: r.get(9)?,
+                created_at: r.get(10)?,
+            })
+        })?
+        .filter_map(Result::ok)
+        .collect();
+    Ok(rows)
+}
+
+pub fn list_user_agent_audit_logs(
+    conn: &rusqlite::Connection,
+    user_id: i64,
+    limit: i64,
+) -> Result<Vec<AgentAuditLogView>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT l.id, l.user_id, l.agent_token_id, t.name, l.tool_name, l.resource_type, l.resource_id, l.status, l.amount_spent, l.details, l.created_at
+         FROM agent_audit_logs l
+         LEFT JOIN agent_tokens t ON l.agent_token_id = t.id
+         WHERE l.user_id = ?1
+         ORDER BY l.id DESC LIMIT ?2",
+    )?;
+    let rows = stmt
+        .query_map(params![user_id, limit], |r| {
+            Ok(AgentAuditLogView {
+                id: r.get(0)?,
+                user_id: r.get(1)?,
+                agent_token_id: r.get(2)?,
+                agent_name: r.get(3)?,
+                tool_name: r.get(4)?,
+                resource_type: r.get(5)?,
+                resource_id: r.get(6)?,
+                status: r.get(7)?,
+                amount_spent: r.get(8)?,
+                details: r.get(9)?,
+                created_at: r.get(10)?,
+            })
+        })?
+        .filter_map(Result::ok)
+        .collect();
+    Ok(rows)
 }
 
 #[derive(Deserialize)]
@@ -2957,6 +3111,7 @@ pub async fn submit_verification_request(
     auth: AuthUser,
     Json(payload): Json<SubmitVerifyPayload>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("write")?;
     let clean_files: Vec<String> = payload
         .files
         .into_iter()
@@ -3001,6 +3156,7 @@ pub async fn update_profile_settings(
     auth: AuthUser,
     Json(payload): Json<UpdateProfilePayload>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("write")?;
     let name = payload.name.trim();
     let username = payload
         .username
@@ -3066,6 +3222,8 @@ pub struct UpdateRatesPayload {
     pub profile_access_price_3_months: f64,
     pub profile_access_price_6_months: f64,
     pub profile_access_price_12_months: f64,
+    pub offer_discount_percent: Option<i64>,
+    pub offer_expires_at: Option<String>,
 }
 
 pub async fn update_rates_settings(
@@ -3073,7 +3231,22 @@ pub async fn update_rates_settings(
     auth: AuthUser,
     Json(payload): Json<UpdateRatesPayload>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("monetize")?;
     let conn = state.lock_db();
+    let p1 = round_money(payload.profile_access_price.max(0.0));
+    let p3 = round_money(payload.profile_access_price_3_months.max(0.0));
+    let p6 = round_money(payload.profile_access_price_6_months.max(0.0));
+    let p12 = round_money(payload.profile_access_price_12_months.max(0.0));
+
+    let (old1, old3, old6, old12): (f64, f64, f64, f64) = conn
+        .query_row(
+            "SELECT profile_access_price, profile_access_price_3_months, profile_access_price_6_months, profile_access_price_12_months
+             FROM users WHERE id = ?1",
+            params![auth.user_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap_or((p1, p3, p6, p12));
+
     conn.execute(
         "UPDATE users SET
             paid_profile = ?1,
@@ -3086,13 +3259,30 @@ pub async fn update_rates_settings(
         params![
             if payload.paid_profile { 1 } else { 0 },
             if payload.open_profile { 1 } else { 0 },
-            round_money(payload.profile_access_price.max(0.0)),
-            round_money(payload.profile_access_price_3_months.max(0.0)),
-            round_money(payload.profile_access_price_6_months.max(0.0)),
-            round_money(payload.profile_access_price_12_months.max(0.0)),
+            p1,
+            p3,
+            p6,
+            p12,
             auth.user_id
         ],
     )?;
+
+    if let Some(exp) = normalize_db_datetime(payload.offer_expires_at) {
+        let disc = payload.offer_discount_percent.unwrap_or(20).clamp(5, 90);
+        conn.execute(
+            "INSERT INTO creator_offers (user_id, old_profile_access_price, old_profile_access_price_3_months, old_profile_access_price_6_months, old_profile_access_price_12_months, discount_percent, expires_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(user_id) DO UPDATE SET
+                old_profile_access_price = excluded.old_profile_access_price,
+                old_profile_access_price_3_months = excluded.old_profile_access_price_3_months,
+                old_profile_access_price_6_months = excluded.old_profile_access_price_6_months,
+                old_profile_access_price_12_months = excluded.old_profile_access_price_12_months,
+                discount_percent = excluded.discount_percent,
+                expires_at = excluded.expires_at",
+            params![auth.user_id, old1.max(p1), old3.max(p3), old6.max(p6), old12.max(p12), disc, exp],
+        )?;
+    }
+
     let updated = get_user_public_profile(&conn, auth.user_id, Some(auth.user_id))?;
     Ok(Json(json!({
         "success": true,
@@ -3119,6 +3309,7 @@ pub async fn update_account_settings(
     auth: AuthUser,
     Json(payload): Json<UpdateAccountPayload>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("admin")?;
     let conn = state.lock_db();
     if let Some(email) = payload.email {
         let clean_email = email.trim().to_lowercase();
@@ -3198,6 +3389,7 @@ pub async fn update_privacy_settings(
     auth: AuthUser,
     Json(payload): Json<UpdatePrivacyPayload>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("write")?;
     let conn = state.lock_db();
     conn.execute(
         "UPDATE users SET public_profile = ?1, enable_2fa = ?2, enable_geoblocking = ?3 WHERE id = ?4",
@@ -3222,6 +3414,7 @@ pub async fn get_vault_items(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("read")?;
     let conn = state.lock_db();
     let mut stmt = conn.prepare(
         "SELECT id, user_id, post_id, message_id, filename, file_url, file_type, file_size, is_vault, is_archived, created_at
@@ -3257,6 +3450,7 @@ pub async fn upload_attachment(
     auth: AuthUser,
     mut multipart: Multipart,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("write")?;
     let mut saved_attachments = Vec::new();
 
     while let Some(field) = multipart
@@ -3342,6 +3536,7 @@ pub async fn toggle_archive_vault_item(
     auth: AuthUser,
     Path(att_id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("write")?;
     let conn = state.lock_db();
     let (owner_id, current_arch): (i64, i64) = conn.query_row(
         "SELECT user_id, is_archived FROM attachments WHERE id = ?1",
@@ -3367,6 +3562,7 @@ pub async fn delete_vault_item(
     auth: AuthUser,
     Path(att_id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("write")?;
     let conn = state.lock_db();
     let (owner_id, post_id, message_id): (i64, Option<i64>, Option<i64>) = conn.query_row(
         "SELECT user_id, post_id, message_id FROM attachments WHERE id = ?1",
@@ -3502,6 +3698,7 @@ pub async fn create_reel(
     auth: AuthUser,
     Json(payload): Json<CreateReelPayload>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("write")?;
     let conn = state.lock_db();
     let vurl = payload
         .video_url
@@ -3545,6 +3742,7 @@ pub async fn delete_reel(
     auth: AuthUser,
     Path(reel_id): Path<i64>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("write")?;
     let conn = state.lock_db();
     let owner_id: i64 = conn.query_row(
         "SELECT user_id FROM reels WHERE id = ?1",
@@ -3605,6 +3803,7 @@ pub async fn add_reel_comment(
     auth: AuthUser,
     Json(payload): Json<AddReelCommentPayload>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("engage")?;
     let msg = payload.message.trim();
     if msg.is_empty() {
         return Err(AppError::Unprocessable("Comment cannot be empty.".into()));
@@ -3650,6 +3849,7 @@ pub async fn delete_reel_comment(
     auth: AuthUser,
     Path(comment_id): Path<i64>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("engage")?;
     let conn = state.lock_db();
     let (comment_user_id, reel_owner_id): (i64, i64) = conn.query_row(
         "SELECT rc.user_id, r.user_id FROM reel_comments rc JOIN reels r ON rc.reel_id = r.id WHERE rc.id = ?1",
@@ -3727,6 +3927,7 @@ pub async fn create_story(
     auth: AuthUser,
     Json(payload): Json<CreateStoryPayload>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("write")?;
     let conn = state.lock_db();
     let murl = payload.media_url.unwrap_or_default().trim().to_string();
     let mtype = payload.media_type.unwrap_or_else(|| {
@@ -3787,6 +3988,7 @@ pub async fn toggle_story_highlight(
     auth: AuthUser,
     Path(story_id): Path<i64>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("write")?;
     let conn = state.lock_db();
     let (owner_id, current_hl): (i64, i64) = conn.query_row(
         "SELECT user_id, is_highlight FROM stories WHERE id = ?1",
@@ -3812,6 +4014,7 @@ pub async fn delete_story(
     auth: AuthUser,
     Path(story_id): Path<i64>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("write")?;
     let conn = state.lock_db();
     let owner_id: i64 = conn.query_row(
         "SELECT user_id FROM stories WHERE id = ?1",
@@ -3956,6 +4159,7 @@ pub async fn save_stream(
     auth: AuthUser,
     Json(payload): Json<SaveStreamPayload>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("write")?;
     let name = payload.name.trim();
     if name.is_empty() {
         return Err(AppError::Unprocessable("Stream title is required.".into()));
@@ -3993,6 +4197,7 @@ pub async fn stop_stream(
     auth: AuthUser,
     Path(stream_id): Path<i64>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("write")?;
     let conn = state.lock_db();
     conn.execute(
         "UPDATE streams SET status = 'ended' WHERE id = ?1 AND (user_id = ?2 OR ?3 = 1)",
@@ -4006,6 +4211,7 @@ pub async fn delete_stream(
     auth: AuthUser,
     Path(stream_id): Path<i64>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("write")?;
     let conn = state.lock_db();
     let owner_id: i64 = conn.query_row(
         "SELECT user_id FROM streams WHERE id = ?1",
@@ -4115,6 +4321,7 @@ pub async fn add_stream_comment(
     auth: AuthUser,
     Json(payload): Json<StreamCommentPayload>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("engage")?;
     let msg = payload.message.trim();
     if msg.is_empty() {
         return Err(AppError::Unprocessable("Message cannot be empty.".into()));
@@ -4163,6 +4370,7 @@ pub async fn get_invoice_detail(
     auth: AuthUser,
     Path(invoice_or_tx_id): Path<i64>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("read")?;
     let conn = state.lock_db();
     let tx = conn.query_row(
         "SELECT t.id, t.sender_user_id, t.recipient_user_id, u1.name, u1.email, u2.name,
@@ -4268,6 +4476,7 @@ pub async fn submit_report(
     auth: AuthUser,
     Json(payload): Json<ReportPayload>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("engage")?;
     let conn = state.lock_db();
     conn.execute(
         "INSERT INTO user_reports (from_user_id, reported_user_id, post_id, report_type, details)
@@ -4292,9 +4501,10 @@ pub struct AiSuggestionPayload {
 }
 
 pub async fn generate_ai_suggestion(
-    _auth: AuthUser,
+    auth: AuthUser,
     Json(payload): Json<AiSuggestionPayload>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("read")?;
     let topic = payload
         .topic
         .unwrap_or_else(|| "exclusive creator update".into());
@@ -4311,6 +4521,7 @@ pub async fn get_admin_dashboard(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("admin")?;
     if auth.role_id != 1 {
         return Err(AppError::Forbidden("Admin privileges required.".into()));
     }
@@ -4433,6 +4644,7 @@ pub async fn handle_admin_withdrawal(
     Path(withdrawal_id): Path<i64>,
     Json(payload): Json<AdminWithdrawalAction>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("admin")?;
     if auth.role_id != 1 {
         return Err(AppError::Forbidden("Admin privileges required.".into()));
     }
@@ -4483,6 +4695,7 @@ pub async fn handle_admin_report(
     Path(report_id): Path<i64>,
     Json(payload): Json<AdminReportAction>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("admin")?;
     if auth.role_id != 1 {
         return Err(AppError::Forbidden("Admin privileges required.".into()));
     }
@@ -4515,6 +4728,7 @@ pub async fn handle_admin_verification(
     Path(verify_id): Path<i64>,
     Json(payload): Json<AdminVerifyAction>,
 ) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("admin")?;
     if auth.role_id != 1 {
         return Err(AppError::Forbidden("Admin privileges required.".into()));
     }
@@ -4550,4 +4764,421 @@ pub async fn handle_admin_verification(
         "status": if payload.action == "approve" { "verified" } else { "rejected" }
     })))
 }
+
+// ============================================================================
+// Broadcast Messaging, Creator Analytics & Agent Token Management
+// ============================================================================
+
+#[derive(Deserialize)]
+pub struct BroadcastMessagePayload {
+    pub list_id: Option<i64>,
+    pub recipient_ids: Option<Vec<i64>>,
+    #[serde(alias = "audience")]
+    pub target: Option<String>, // "subscribers", "followers", "all", "list"
+    pub message: String,
+    pub price: Option<f64>,
+    pub attachments: Option<Vec<String>>,
+}
+
+pub async fn broadcast_message(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(payload): Json<BroadcastMessagePayload>,
+) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("messages")?;
+    let msg = payload.message.trim();
+    let attachment_inputs = payload.attachments.clone().unwrap_or_default();
+    if msg.is_empty() && attachment_inputs.is_empty() {
+        return Err(AppError::Unprocessable(
+            "Broadcast message must contain text or at least one attachment.".into(),
+        ));
+    }
+    let price = round_money(payload.price.unwrap_or(0.0).max(0.0));
+    let conn = state.lock_db();
+
+    let mut targets: Vec<i64> = Vec::new();
+    if let Some(ref ids) = payload.recipient_ids {
+        for &id in ids {
+            if id != auth.user_id && !targets.contains(&id) {
+                targets.push(id);
+            }
+        }
+    }
+    if let Some(lid) = payload.list_id {
+        let mut stmt = conn.prepare(
+            "SELECT ulm.user_id FROM user_list_members ulm
+             JOIN user_lists ul ON ulm.list_id = ul.id
+             WHERE ul.id = ?1 AND ul.user_id = ?2",
+        )?;
+        let rows: Vec<i64> = stmt
+            .query_map(params![lid, auth.user_id], |r| r.get(0))?
+            .filter_map(Result::ok)
+            .collect();
+        for id in rows {
+            if id != auth.user_id && !targets.contains(&id) {
+                targets.push(id);
+            }
+        }
+    }
+    if targets.is_empty() {
+        let target_mode = payload.target.as_deref().unwrap_or("subscribers");
+        if target_mode == "followers" || target_mode == "all" {
+            let mut stmt = conn.prepare(
+                "SELECT ulm.user_id FROM user_list_members ulm
+                 JOIN user_lists ul ON ulm.list_id = ul.id
+                 WHERE ul.user_id = ?1 AND ul.list_type = 'followers'",
+            )?;
+            let rows: Vec<i64> = stmt
+                .query_map(params![auth.user_id], |r| r.get(0))?
+                .filter_map(Result::ok)
+                .collect();
+            for id in rows {
+                if id != auth.user_id && !targets.contains(&id) {
+                    targets.push(id);
+                }
+            }
+        }
+        if target_mode != "followers" {
+            let mut stmt = conn.prepare(
+                "SELECT DISTINCT sender_user_id FROM subscriptions
+                 WHERE recipient_user_id = ?1 AND status = 'completed' AND expires_at >= datetime('now')",
+            )?;
+            let rows: Vec<i64> = stmt
+                .query_map(params![auth.user_id], |r| r.get(0))?
+                .filter_map(Result::ok)
+                .collect();
+            for id in rows {
+                if id != auth.user_id && !targets.contains(&id) {
+                    targets.push(id);
+                }
+            }
+        }
+    }
+
+    let final_msg = if msg.is_empty() {
+        "📎 Sent broadcast media attachment".to_string()
+    } else {
+        msg.to_string()
+    };
+
+    let mut sent_ids = Vec::new();
+    for receiver_id in targets {
+        if is_blocked_between(&conn, auth.user_id, receiver_id) {
+            continue;
+        }
+        conn.execute(
+            "INSERT INTO user_messages (sender_id, receiver_id, message, price) VALUES (?1, ?2, ?3, ?4)",
+            params![auth.user_id, receiver_id, final_msg, price],
+        )?;
+        let mid = conn.last_insert_rowid();
+        for item in &attachment_inputs {
+            let new_att_id = Uuid::new_v4().to_string();
+            let ftype = if item.ends_with(".mp4") || item.ends_with(".webm") {
+                "video"
+            } else {
+                "image"
+            };
+            let _ = conn.execute(
+                "INSERT INTO attachments (id, user_id, message_id, filename, file_url, file_type, file_size)
+                 VALUES (?1, ?2, ?3, 'broadcast-media', ?4, ?5, 1024)",
+                params![new_att_id, auth.user_id, mid, item, ftype],
+            );
+        }
+        let _ = conn.execute(
+            "INSERT INTO notifications (id, from_user_id, to_user_id, notification_type, message)
+             VALUES (?1, ?2, ?3, 'message', ?4)",
+            params![
+                Uuid::new_v4().to_string(),
+                auth.user_id,
+                receiver_id,
+                format!("@{} sent a broadcast message", auth.username)
+            ],
+        );
+        sent_ids.push(mid);
+    }
+
+    Ok(Json(json!({
+        "success": true,
+        "sent_count": sent_ids.len(),
+        "message_ids": sent_ids,
+        "message": format!("Broadcast delivered to {} recipient(s).", sent_ids.len())
+    })))
+}
+
+#[derive(Deserialize)]
+pub struct CreateAgentTokenPayload {
+    pub name: String,
+    pub scopes: Option<Vec<String>>,
+    pub max_spend_per_tx: Option<f64>,
+    pub daily_spend_limit: Option<f64>,
+    pub expires_in_days: Option<i64>,
+}
+
+pub async fn create_agent_token(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(payload): Json<CreateAgentTokenPayload>,
+) -> Result<impl IntoResponse, AppError> {
+    if auth.agent_token_id.is_some() {
+        auth.require_scope("admin")?;
+    }
+    let name = payload.name.trim();
+    if name.is_empty() {
+        return Err(AppError::Unprocessable("Agent key name is required.".into()));
+    }
+    let scopes = payload.scopes.unwrap_or_else(|| {
+        vec![
+            "read".into(),
+            "write".into(),
+            "engage".into(),
+            "monetize".into(),
+            "messages".into(),
+            "wallet".into(),
+        ]
+    });
+    let scopes_json = serde_json::to_string(&scopes).unwrap_or_else(|_| "[]".into());
+    let max_tx = round_money(payload.max_spend_per_tx.unwrap_or(50.0).max(0.0));
+    let daily_lim = round_money(payload.daily_spend_limit.unwrap_or(200.0).max(0.0));
+
+    let raw_secret = format!(
+        "hp_mcp_{}_{}",
+        auth.user_id,
+        Uuid::new_v4().simple()
+    );
+    let prefix = format!("{}...", &raw_secret[..14.min(raw_secret.len())]);
+    let token_hash = crate::auth::hash_agent_token(&raw_secret);
+
+    let conn = state.lock_db();
+    let expires_at: Option<String> = payload.expires_in_days.and_then(|days| {
+        if days > 0 {
+            conn.query_row(
+                "SELECT datetime('now', ?1)",
+                params![format!("+{days} days")],
+                |r| r.get(0),
+            )
+            .ok()
+        } else {
+            None
+        }
+    });
+
+    conn.execute(
+        "INSERT INTO agent_tokens (user_id, name, token_prefix, token_hash, scopes, max_spend_per_tx, daily_spend_limit, is_active, expires_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8)",
+        params![
+            auth.user_id,
+            name,
+            prefix,
+            token_hash,
+            scopes_json,
+            max_tx,
+            daily_lim,
+            expires_at
+        ],
+    )?;
+    let tid = conn.last_insert_rowid();
+
+    let _ = conn.execute(
+        "INSERT INTO agent_audit_logs (user_id, agent_token_id, tool_name, resource_type, resource_id, status, amount_spent, details)
+         VALUES (?1, ?2, 'agent_token.create', 'agent_token', ?3, 'success', 0.0, ?4)",
+        params![
+            auth.user_id,
+            tid,
+            tid.to_string(),
+            json!({ "name": name, "scopes": scopes, "max_spend_per_tx": max_tx, "daily_spend_limit": daily_lim }).to_string()
+        ],
+    );
+
+    let tokens = list_user_agent_tokens(&conn, auth.user_id)?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "success": true,
+            "message": "Autonomous MCP Agent Token generated. Copy it now — it will not be shown in full again.",
+            "agent_token": raw_secret,
+            "token_id": tid,
+            "agent_tokens": tokens
+        })),
+    ))
+}
+
+pub async fn get_agent_tokens(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("read")?;
+    let conn = state.lock_db();
+    let tokens = list_user_agent_tokens(&conn, auth.user_id)?;
+    let audit_logs = list_user_agent_audit_logs(&conn, auth.user_id, 100)?;
+    Ok(Json(json!({
+        "success": true,
+        "agent_tokens": tokens,
+        "agent_audit_logs": audit_logs
+    })))
+}
+
+pub async fn revoke_agent_token(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(token_id): Path<i64>,
+) -> Result<impl IntoResponse, AppError> {
+    if auth.agent_token_id.is_some() && auth.agent_token_id != Some(token_id) {
+        auth.require_scope("admin")?;
+    }
+    let conn = state.lock_db();
+    let updated = conn.execute(
+        "UPDATE agent_tokens SET is_active = 0 WHERE id = ?1 AND (user_id = ?2 OR ?3 = 1)",
+        params![token_id, auth.user_id, auth.role_id],
+    )?;
+    if updated == 0 {
+        return Err(AppError::NotFound("Agent token not found.".into()));
+    }
+    let _ = conn.execute(
+        "INSERT INTO agent_audit_logs (user_id, agent_token_id, tool_name, resource_type, resource_id, status, amount_spent, details)
+         VALUES (?1, ?2, 'agent_token.revoke', 'agent_token', ?3, 'success', 0.0, '{}')",
+        params![auth.user_id, token_id, token_id.to_string()],
+    );
+    Ok(Json(json!({
+        "success": true,
+        "message": "Agent token revoked."
+    })))
+}
+
+pub async fn delete_agent_token(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(token_id): Path<i64>,
+) -> Result<impl IntoResponse, AppError> {
+    if auth.agent_token_id.is_some() && auth.agent_token_id != Some(token_id) {
+        auth.require_scope("admin")?;
+    }
+    let conn = state.lock_db();
+    let deleted = conn.execute(
+        "DELETE FROM agent_tokens WHERE id = ?1 AND (user_id = ?2 OR ?3 = 1)",
+        params![token_id, auth.user_id, auth.role_id],
+    )?;
+    if deleted == 0 {
+        return Err(AppError::NotFound("Agent token not found.".into()));
+    }
+    Ok(Json(json!({
+        "success": true,
+        "message": "Agent token deleted."
+    })))
+}
+
+pub async fn get_creator_analytics(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<impl IntoResponse, AppError> {
+    auth.require_scope("read")?;
+    let conn = state.lock_db();
+    let profile = get_user_public_profile(&conn, auth.user_id, Some(auth.user_id))?;
+
+    let (gross_earnings, tx_count): (f64, i64) = conn
+        .query_row(
+            "SELECT COALESCE(SUM(amount), 0.0), COUNT(*) FROM transactions
+             WHERE recipient_user_id = ?1 AND sender_user_id != ?1 AND status = 'approved'",
+            params![auth.user_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap_or((0.0, 0));
+
+    let net_earnings = round_money(gross_earnings * 0.85);
+
+    let sub_revenue: f64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(amount), 0.0) FROM transactions
+             WHERE recipient_user_id = ?1 AND tx_type IN ('subscription', 'one-month-subscription') AND status = 'approved'",
+            params![auth.user_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0.0);
+
+    let ppv_revenue: f64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(amount), 0.0) FROM transactions
+             WHERE recipient_user_id = ?1 AND tx_type IN ('post-unlock', 'message-unlock', 'reel-unlock', 'stream-unlock') AND status = 'approved'",
+            params![auth.user_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0.0);
+
+    let tips_revenue: f64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(amount), 0.0) FROM transactions
+             WHERE recipient_user_id = ?1 AND tx_type = 'tip' AND status = 'approved'",
+            params![auth.user_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0.0);
+
+    let total_likes: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM reactions r JOIN posts p ON r.post_id = p.id WHERE p.user_id = ?1",
+            params![auth.user_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+
+    let total_comments: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM post_comments c JOIN posts p ON c.post_id = p.id WHERE p.user_id = ?1",
+            params![auth.user_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+
+    let total_reel_views: i64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(views_count), 0) FROM reels WHERE user_id = ?1",
+            params![auth.user_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+
+    let total_story_views: i64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(views_count), 0) FROM stories WHERE user_id = ?1",
+            params![auth.user_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+
+    let agent_actions_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM agent_audit_logs WHERE user_id = ?1",
+            params![auth.user_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+
+    Ok(Json(json!({
+        "success": true,
+        "analytics": {
+            "user_id": auth.user_id,
+            "username": profile.username,
+            "wallet_balance": profile.wallet_balance,
+            "active_subscribers": profile.fans_count,
+            "followers_count": profile.followers_count,
+            "posts_count": profile.posts_count,
+            "gross_earnings": round_money(gross_earnings),
+            "net_earnings_85_pct": net_earnings,
+            "transactions_count": tx_count,
+            "revenue_breakdown": {
+                "subscriptions": round_money(sub_revenue),
+                "ppv_unlocks": round_money(ppv_revenue),
+                "tips": round_money(tips_revenue),
+            },
+            "engagement": {
+                "post_likes": total_likes,
+                "post_comments": total_comments,
+                "reel_views": total_reel_views,
+                "story_views": total_story_views,
+                "autonomous_agent_actions": agent_actions_count
+            }
+        }
+    })))
+}
+
 
