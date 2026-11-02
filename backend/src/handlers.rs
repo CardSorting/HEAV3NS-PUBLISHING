@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::{
     auth::{create_jwt, AppError, AuthUser, OptionalAuthUser},
-    db::{build_post_view, get_user_public_profile, AppState},
+    db::{build_post_view, get_user_public_profile, is_blocked_between, round_money, AppState},
     models::*,
 };
 
@@ -31,7 +31,7 @@ pub async fn get_home_data(
     State(state): State<AppState>,
     OptionalAuthUser(auth): OptionalAuthUser,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     let viewer_id = auth.as_ref().map(|a| a.user_id);
 
     let mut stmt = conn.prepare("SELECT id FROM users ORDER BY id ASC LIMIT 9")?;
@@ -42,6 +42,11 @@ pub async fn get_home_data(
 
     let mut featured_members = Vec::new();
     for uid in ids {
+        if let Some(vid) = viewer_id {
+            if is_blocked_between(&conn, vid, uid) {
+                continue;
+            }
+        }
         if let Ok(profile) = get_user_public_profile(&conn, uid, viewer_id) {
             featured_members.push(profile);
         }
@@ -68,6 +73,21 @@ pub struct RegisterPayload {
     pub username: Option<String>,
     pub email: String,
     pub password: String,
+    pub referral_code: Option<String>,
+}
+
+pub fn normalize_db_datetime(input: Option<String>) -> Option<String> {
+    let raw = input?.trim().replace('T', " ");
+    if raw.is_empty() {
+        return None;
+    }
+    if raw.len() == 10 {
+        Some(format!("{raw} 00:00:00"))
+    } else if raw.len() == 16 {
+        Some(format!("{raw}:00"))
+    } else {
+        Some(raw)
+    }
 }
 
 pub async fn register(
@@ -104,7 +124,7 @@ pub async fn register(
         raw_username
     };
 
-    let conn = state.db.lock().unwrap();
+    let mut conn = state.lock_db();
 
     let exists: i64 = conn.query_row(
         "SELECT COUNT(*) FROM users WHERE email = ?1 OR username = ?2",
@@ -125,28 +145,65 @@ pub async fn register(
         &Uuid::new_v4().simple().to_string()[..4].to_uppercase()
     );
 
-    conn.execute(
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    tx.execute(
         "INSERT INTO users (name, username, email, password_hash, role_id, email_verified_at, referral_code)
          VALUES (?1, ?2, ?3, ?4, 2, datetime('now'), ?5)",
         params![name, username, email, password_hash, referral_code],
     )?;
-    let user_id = conn.last_insert_rowid();
+    let user_id = tx.last_insert_rowid();
 
-    conn.execute(
+    tx.execute(
         "INSERT INTO wallets (user_id, total) VALUES (?1, 100.0)",
         params![user_id],
     )?;
+
+    if let Some(ref_code) = payload.referral_code.as_deref() {
+        let clean_ref = ref_code.trim();
+        if !clean_ref.is_empty() {
+            if let Ok(referrer_id) = tx.query_row::<i64, _, _>(
+                "SELECT id FROM users WHERE UPPER(referral_code) = UPPER(?1) AND id != ?2",
+                params![clean_ref, user_id],
+                |r| r.get(0),
+            ) {
+                tx.execute(
+                    "UPDATE wallets SET total = ROUND(total + 5.0, 2), updated_at = datetime('now') WHERE user_id = ?1",
+                    params![referrer_id],
+                )?;
+                tx.execute(
+                    "UPDATE wallets SET total = ROUND(total + 5.0, 2), updated_at = datetime('now') WHERE user_id = ?1",
+                    params![user_id],
+                )?;
+                let _ = tx.execute(
+                    "INSERT INTO referrals (referrer_user_id, referred_user_id, referral_code, bonus_amount)
+                     VALUES (?1, ?2, ?3, 5.0)",
+                    params![referrer_id, user_id, clean_ref.to_uppercase()],
+                );
+                let _ = tx.execute(
+                    "INSERT INTO notifications (id, from_user_id, to_user_id, notification_type, message)
+                     VALUES (?1, ?2, ?3, 'tip', ?4)",
+                    params![
+                        Uuid::new_v4().to_string(),
+                        user_id,
+                        referrer_id,
+                        format!("@{} joined using your referral link! You earned a $5.00 bonus.", username)
+                    ],
+                );
+            }
+        }
+    }
 
     for (lname, ltype) in [
         ("Followers", "followers"),
         ("Following", "following"),
         ("Blocked", "blocked"),
     ] {
-        conn.execute(
+        tx.execute(
             "INSERT INTO user_lists (user_id, name, list_type) VALUES (?1, ?2, ?3)",
             params![user_id, lname, ltype],
         )?;
     }
+    tx.commit()?;
 
     let token = create_jwt(user_id, &username, 2)?;
     let profile = get_user_public_profile(&conn, user_id, Some(user_id))?;
@@ -183,7 +240,7 @@ pub async fn login(
         return Err(AppError::BadRequest("Email/username and password are required.".into()));
     }
 
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
 
     let user_row: Result<(i64, String, String, i64), rusqlite::Error> = conn.query_row(
         "SELECT id, username, password_hash, role_id FROM users WHERE email = ?1 OR username = ?1",
@@ -239,7 +296,7 @@ pub async fn get_me(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     let profile = get_user_public_profile(&conn, auth.user_id, Some(auth.user_id))?;
 
     let unread_notifications: i64 = conn
@@ -258,11 +315,20 @@ pub async fn get_me(
         )
         .unwrap_or(0);
 
+    let active_streams_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM streams WHERE status = 'in-progress' AND is_public = 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+
     Ok(Json(json!({
         "success": true,
         "user": profile,
         "unread_notifications": unread_notifications,
-        "unread_messages": unread_messages
+        "unread_messages": unread_messages,
+        "active_streams_count": active_streams_count
     })))
 }
 
@@ -281,7 +347,7 @@ pub async fn get_feed(
     OptionalAuthUser(auth): OptionalAuthUser,
     Query(query): Query<FeedQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     let viewer_id = auth.as_ref().map(|a| a.user_id);
     let page = query.page.unwrap_or(1).max(1);
     let per_page = 20;
@@ -303,6 +369,11 @@ pub async fn get_feed(
     let mut filtered_posts = Vec::new();
     for pid in post_ids {
         if let Ok(pv) = build_post_view(&conn, pid, viewer_id) {
+            if let Some(vid) = viewer_id {
+                if is_blocked_between(&conn, vid, pv.user_id) {
+                    continue;
+                }
+            }
             if filter == "media" && pv.attachments.is_empty() {
                 continue;
             }
@@ -344,9 +415,9 @@ fn build_suggestions(
     free_only: bool,
 ) -> Result<Vec<UserPublicProfile>, rusqlite::Error> {
     let sql = if free_only {
-        "SELECT id FROM users WHERE (paid_profile = 0 OR open_profile = 1 OR profile_access_price <= 0) ORDER BY id ASC LIMIT 6"
+        "SELECT id FROM users WHERE public_profile = 1 AND (paid_profile = 0 OR open_profile = 1 OR profile_access_price <= 0) ORDER BY id ASC LIMIT 6"
     } else {
-        "SELECT id FROM users ORDER BY id ASC LIMIT 6"
+        "SELECT id FROM users WHERE public_profile = 1 ORDER BY id ASC LIMIT 6"
     };
     let mut stmt = conn.prepare(sql)?;
     let ids: Vec<i64> = stmt
@@ -358,6 +429,11 @@ fn build_suggestions(
     for uid in ids {
         if Some(uid) == viewer_id {
             continue;
+        }
+        if let Some(vid) = viewer_id {
+            if is_blocked_between(conn, vid, uid) {
+                continue;
+            }
         }
         if let Ok(p) = get_user_public_profile(conn, uid, viewer_id) {
             list.push(p);
@@ -376,7 +452,7 @@ pub async fn filter_suggestions(
     OptionalAuthUser(auth): OptionalAuthUser,
     Json(payload): Json<Option<SuggestionsFilterPayload>>,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     let viewer_id = auth.as_ref().map(|a| a.user_id);
     let free_only = payload.and_then(|p| p.free_only).unwrap_or(false);
     let suggestions = build_suggestions(&conn, viewer_id, free_only)?;
@@ -395,8 +471,30 @@ pub async fn get_single_post(
     OptionalAuthUser(auth): OptionalAuthUser,
     Path(post_id): Path<i64>,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     let viewer_id = auth.as_ref().map(|a| a.user_id);
+    let is_admin = auth.as_ref().map(|a| a.role_id == 1).unwrap_or(false);
+
+    let (author_id, is_published): (i64, bool) = conn.query_row(
+        "SELECT user_id,
+                (status = 1
+                 AND (release_date IS NULL OR release_date <= datetime('now'))
+                 AND (expire_date IS NULL OR expire_date >= datetime('now')))
+         FROM posts WHERE id = ?1",
+        params![post_id],
+        |r| Ok((r.get(0)?, r.get::<_, i64>(1)? != 0)),
+    )?;
+
+    if let Some(vid) = viewer_id {
+        if !is_admin && is_blocked_between(&conn, vid, author_id) {
+            return Err(AppError::Forbidden("You cannot view this creator's posts.".into()));
+        }
+    }
+
+    if !is_published && viewer_id != Some(author_id) && !is_admin {
+        return Err(AppError::NotFound("Post is not available or has expired.".into()));
+    }
+
     let post = build_post_view(&conn, post_id, viewer_id)?;
     let author = get_user_public_profile(&conn, post.user_id, viewer_id)?;
 
@@ -433,9 +531,17 @@ pub async fn save_post(
         ));
     }
 
-    let price = payload.price.unwrap_or(0.0).max(0.0);
+    let price = round_money(
+        payload
+            .price
+            .filter(|v| v.is_finite())
+            .unwrap_or(0.0)
+            .max(0.0),
+    );
     let is_pinned = if payload.is_pinned.unwrap_or(false) { 1 } else { 0 };
-    let conn = state.db.lock().unwrap();
+    let release_date = normalize_db_datetime(payload.release_date);
+    let expire_date = normalize_db_datetime(payload.expire_date);
+    let conn = state.lock_db();
 
     let post_id = if let Some(existing_id) = payload.id {
         let owner_id: i64 = conn.query_row(
@@ -452,8 +558,8 @@ pub async fn save_post(
                 text,
                 price,
                 is_pinned,
-                payload.release_date,
-                payload.expire_date,
+                release_date,
+                expire_date,
                 existing_id
             ],
         )?;
@@ -467,8 +573,8 @@ pub async fn save_post(
                 text,
                 price,
                 is_pinned,
-                payload.release_date,
-                payload.expire_date
+                release_date,
+                expire_date
             ],
         )?;
         conn.last_insert_rowid()
@@ -510,17 +616,42 @@ pub async fn save_post(
             .filter(|a| !a.is_empty())
             .collect();
         if clean_answers.len() >= 2 {
-            conn.execute("DELETE FROM polls WHERE post_id = ?1", params![post_id])?;
-            conn.execute(
-                "INSERT INTO polls (user_id, post_id) VALUES (?1, ?2)",
-                params![auth.user_id, post_id],
-            )?;
-            let poll_id = conn.last_insert_rowid();
-            for ans in clean_answers {
+            // Preserve existing poll and votes if answers are identical when editing
+            let existing_poll: Option<(i64, Vec<String>)> = conn
+                .query_row(
+                    "SELECT id FROM polls WHERE post_id = ?1",
+                    params![post_id],
+                    |r| r.get::<_, i64>(0),
+                )
+                .ok()
+                .map(|pid| {
+                    let mut stmt = conn
+                        .prepare("SELECT answer FROM poll_answers WHERE poll_id = ?1 ORDER BY id ASC")
+                        .unwrap();
+                    let cur: Vec<String> = stmt
+                        .query_map(params![pid], |r| r.get(0))
+                        .unwrap()
+                        .filter_map(Result::ok)
+                        .collect();
+                    (pid, cur)
+                });
+
+            let needs_recreate =
+                !matches!(existing_poll, Some((_, ref cur)) if *cur == clean_answers);
+
+            if needs_recreate {
+                conn.execute("DELETE FROM polls WHERE post_id = ?1", params![post_id])?;
                 conn.execute(
-                    "INSERT INTO poll_answers (poll_id, answer) VALUES (?1, ?2)",
-                    params![poll_id, ans],
+                    "INSERT INTO polls (user_id, post_id) VALUES (?1, ?2)",
+                    params![auth.user_id, post_id],
                 )?;
+                let poll_id = conn.last_insert_rowid();
+                for ans in clean_answers {
+                    conn.execute(
+                        "INSERT INTO poll_answers (poll_id, answer) VALUES (?1, ?2)",
+                        params![poll_id, ans],
+                    )?;
+                }
             }
         }
     }
@@ -539,7 +670,7 @@ pub async fn delete_post(
     auth: AuthUser,
     Path(post_id): Path<i64>,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     let owner_id: i64 = conn.query_row(
         "SELECT user_id FROM posts WHERE id = ?1",
         params![post_id],
@@ -567,9 +698,17 @@ pub async fn toggle_reaction(
     auth: AuthUser,
     Json(payload): Json<ReactPayload>,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
 
     if let Some(pid) = payload.post_id {
+        let author_id: i64 = conn.query_row(
+            "SELECT user_id FROM posts WHERE id = ?1",
+            params![pid],
+            |r| r.get(0),
+        )?;
+        if is_blocked_between(&conn, auth.user_id, author_id) {
+            return Err(AppError::Forbidden("Cannot react to this creator's post.".into()));
+        }
         let existing: Option<i64> = conn
             .query_row(
                 "SELECT id FROM reactions WHERE post_id = ?1 AND user_id = ?2",
@@ -587,24 +726,18 @@ pub async fn toggle_reaction(
                 params![auth.user_id, pid],
             )?;
             // Notify post owner
-            if let Ok(author_id) = conn.query_row::<i64, _, _>(
-                "SELECT user_id FROM posts WHERE id = ?1",
-                params![pid],
-                |r| r.get(0),
-            ) {
-                if author_id != auth.user_id {
-                    let _ = conn.execute(
-                        "INSERT INTO notifications (id, from_user_id, to_user_id, notification_type, post_id, message)
-                         VALUES (?1, ?2, ?3, 'like', ?4, ?5)",
-                        params![
-                            Uuid::new_v4().to_string(),
-                            auth.user_id,
-                            author_id,
-                            pid,
-                            format!("@{} liked your post", auth.username)
-                        ],
-                    );
-                }
+            if author_id != auth.user_id {
+                let _ = conn.execute(
+                    "INSERT INTO notifications (id, from_user_id, to_user_id, notification_type, post_id, message)
+                     VALUES (?1, ?2, ?3, 'like', ?4, ?5)",
+                    params![
+                        Uuid::new_v4().to_string(),
+                        auth.user_id,
+                        author_id,
+                        pid,
+                        format!("@{} liked your post", auth.username)
+                    ],
+                );
             }
             true
         };
@@ -653,6 +786,14 @@ pub async fn toggle_reaction(
     }
 
     if let Some(rid_target) = payload.reel_id {
+        let owner_id: i64 = conn.query_row(
+            "SELECT user_id FROM reels WHERE id = ?1",
+            params![rid_target],
+            |r| r.get(0),
+        )?;
+        if is_blocked_between(&conn, auth.user_id, owner_id) {
+            return Err(AppError::Forbidden("Cannot react to this creator's reel.".into()));
+        }
         let existing: Option<i64> = conn
             .query_row(
                 "SELECT id FROM reactions WHERE reel_id = ?1 AND user_id = ?2",
@@ -696,7 +837,7 @@ pub async fn toggle_bookmark(
     auth: AuthUser,
     Json(payload): Json<BookmarkPayload>,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
 
     if let Some(pid) = payload.post_id {
         let existing: Option<i64> = conn
@@ -763,7 +904,7 @@ pub async fn toggle_pin_post(
     auth: AuthUser,
     Json(payload): Json<PinPostPayload>,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     let (owner_id, current_pin): (i64, i64) = conn.query_row(
         "SELECT user_id, is_pinned FROM posts WHERE id = ?1",
         params![payload.post_id],
@@ -798,12 +939,19 @@ pub async fn add_comment(
     if msg.is_empty() {
         return Err(AppError::Unprocessable("Comment cannot be empty.".into()));
     }
-    let conn = state.db.lock().unwrap();
-    let author_id: i64 = conn.query_row(
-        "SELECT user_id FROM posts WHERE id = ?1",
-        params![payload.post_id],
-        |r| r.get(0),
-    )?;
+    let conn = state.lock_db();
+    let post_view = build_post_view(&conn, payload.post_id, Some(auth.user_id))?;
+
+    if is_blocked_between(&conn, auth.user_id, post_view.user_id) {
+        return Err(AppError::Forbidden("You cannot comment on this creator's posts.".into()));
+    }
+    if !post_view.is_unlocked {
+        return Err(AppError::Forbidden(
+            "You must subscribe or unlock this post before commenting.".into(),
+        ));
+    }
+
+    let author_id = post_view.user_id;
 
     conn.execute(
         "INSERT INTO post_comments (post_id, user_id, message) VALUES (?1, ?2, ?3)",
@@ -853,18 +1001,52 @@ pub async fn add_comment(
     })))
 }
 
-pub async fn delete_comment(
+#[derive(Deserialize)]
+pub struct EditCommentPayload {
+    pub message: String,
+}
+
+pub async fn edit_comment(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(comment_id): Path<i64>,
+    Json(payload): Json<EditCommentPayload>,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let msg = payload.message.trim();
+    if msg.is_empty() {
+        return Err(AppError::Unprocessable("Comment cannot be empty.".into()));
+    }
+    let conn = state.lock_db();
     let owner_id: i64 = conn.query_row(
         "SELECT user_id FROM post_comments WHERE id = ?1",
         params![comment_id],
         |r| r.get(0),
     )?;
     if owner_id != auth.user_id && auth.role_id != 1 {
+        return Err(AppError::Forbidden("Cannot edit another user's comment.".into()));
+    }
+    conn.execute(
+        "UPDATE post_comments SET message = ?1 WHERE id = ?2",
+        params![msg, comment_id],
+    )?;
+    Ok(Json(json!({
+        "success": true,
+        "message": msg
+    })))
+}
+
+pub async fn delete_comment(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(comment_id): Path<i64>,
+) -> Result<impl IntoResponse, AppError> {
+    let conn = state.lock_db();
+    let (owner_id, post_author_id): (i64, i64) = conn.query_row(
+        "SELECT c.user_id, p.user_id FROM post_comments c JOIN posts p ON c.post_id = p.id WHERE c.id = ?1",
+        params![comment_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    if owner_id != auth.user_id && post_author_id != auth.user_id && auth.role_id != 1 {
         return Err(AppError::Forbidden("Cannot delete another user's comment.".into()));
     }
     conn.execute("DELETE FROM post_comments WHERE id = ?1", params![comment_id])?;
@@ -882,12 +1064,20 @@ pub async fn vote_poll(
     auth: AuthUser,
     Json(payload): Json<PollVotePayload>,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     let post_id: i64 = conn.query_row(
         "SELECT post_id FROM polls WHERE id = ?1",
         params![payload.poll_id],
         |r| r.get(0),
     )?;
+
+    let post_view = build_post_view(&conn, post_id, Some(auth.user_id))?;
+    if is_blocked_between(&conn, auth.user_id, post_view.user_id) {
+        return Err(AppError::Forbidden("You cannot vote on this creator's poll.".into()));
+    }
+    if !post_view.is_unlocked {
+        return Err(AppError::Forbidden("Unlock this post to vote in the poll.".into()));
+    }
 
     let valid_answer: i64 = conn.query_row(
         "SELECT COUNT(*) FROM poll_answers WHERE id = ?1 AND poll_id = ?2",
@@ -920,14 +1110,47 @@ pub struct ProfileQuery {
     pub filter: Option<String>,
 }
 
+pub fn compute_reel_unlocked(
+    conn: &rusqlite::Connection,
+    reel_id: i64,
+    owner_id: i64,
+    price: f64,
+    viewer_id: Option<i64>,
+) -> bool {
+    if price <= 0.0 {
+        return true;
+    }
+    if let Some(vid) = viewer_id {
+        if vid == owner_id {
+            return true;
+        }
+        let role: i64 = conn
+            .query_row("SELECT role_id FROM users WHERE id = ?1", params![vid], |r| r.get(0))
+            .unwrap_or(2);
+        if role == 1 {
+            return true;
+        }
+        conn.query_row(
+            "SELECT COUNT(*) FROM transactions WHERE sender_user_id = ?1 AND reel_id = ?2 AND tx_type = 'reel-unlock' AND status = 'approved'",
+            params![vid, reel_id],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+            > 0
+    } else {
+        false
+    }
+}
+
 pub async fn get_profile(
     State(state): State<AppState>,
     OptionalAuthUser(auth): OptionalAuthUser,
     Path(username): Path<String>,
     Query(query): Query<ProfileQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     let viewer_id = auth.as_ref().map(|a| a.user_id);
+    let is_admin = auth.as_ref().map(|a| a.role_id == 1).unwrap_or(false);
 
     let target_id: i64 = conn
         .query_row(
@@ -937,11 +1160,30 @@ pub async fn get_profile(
         )
         .map_err(|_| AppError::NotFound(format!("Profile @{username} not found")))?;
 
+    if let Some(vid) = viewer_id {
+        if !is_admin && is_blocked_between(&conn, vid, target_id) {
+            return Err(AppError::Forbidden(
+                "This profile is unavailable due to block settings.".into(),
+            ));
+        }
+    }
+
     let profile = get_user_public_profile(&conn, target_id, viewer_id)?;
 
-    let mut stmt = conn.prepare(
-        "SELECT id FROM posts WHERE user_id = ?1 AND status = 1 ORDER BY is_pinned DESC, id DESC",
-    )?;
+    if !profile.public_profile && viewer_id.is_none() {
+        return Err(AppError::Forbidden(
+            "This profile is private. Please sign in to view.".into(),
+        ));
+    }
+
+    let is_owner_or_admin = viewer_id == Some(target_id) || is_admin;
+    let post_sql = if is_owner_or_admin {
+        "SELECT id FROM posts WHERE user_id = ?1 ORDER BY is_pinned DESC, id DESC"
+    } else {
+        "SELECT id FROM posts WHERE user_id = ?1 AND status = 1 AND (release_date IS NULL OR release_date <= datetime('now')) AND (expire_date IS NULL OR expire_date >= datetime('now')) ORDER BY is_pinned DESC, id DESC"
+    };
+
+    let mut stmt = conn.prepare(post_sql)?;
     let post_ids: Vec<i64> = stmt
         .query_map(params![target_id], |r| r.get(0))?
         .filter_map(Result::ok)
@@ -996,12 +1238,102 @@ pub async fn get_profile(
                 requires_subscription: req_sub,
                 is_public: r.get::<_, i64>(7)? != 0,
                 status: r.get(8)?,
-                rtmp_server: r.get(9)?,
-                rtmp_key: String::new(),
+                rtmp_server: if is_owner_or_admin { r.get(9)? } else { String::new() },
+                rtmp_key: if is_owner_or_admin { r.get(10)? } else { String::new() },
                 hls_link: if is_unlocked { r.get(11)? } else { String::new() },
                 viewer_count: r.get(12)?,
                 is_unlocked,
                 created_at: r.get(13)?,
+            })
+        })?
+        .filter_map(Result::ok)
+        .collect();
+
+    // Reels for this creator
+    let mut r_stmt = conn.prepare(
+        "SELECT id, user_id, caption, video_url, cover_url, price, views_count, created_at
+         FROM reels WHERE user_id = ?1 ORDER BY id DESC",
+    )?;
+    let reels: Vec<ReelView> = r_stmt
+        .query_map(params![target_id], |r| {
+            let rid: i64 = r.get(0)?;
+            let price: f64 = r.get(5)?;
+            let is_unlocked = compute_reel_unlocked(&conn, rid, target_id, price, viewer_id);
+            let likes_count: i64 = conn
+                .query_row("SELECT COUNT(*) FROM reactions WHERE reel_id = ?1", params![rid], |row| row.get(0))
+                .unwrap_or(0);
+            let comments_count: i64 = conn
+                .query_row("SELECT COUNT(*) FROM reel_comments WHERE reel_id = ?1", params![rid], |row| row.get(0))
+                .unwrap_or(0);
+            let user_liked = viewer_id
+                .map(|vid| {
+                    conn.query_row(
+                        "SELECT COUNT(*) FROM reactions WHERE reel_id = ?1 AND user_id = ?2",
+                        params![rid, vid],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .unwrap_or(0)
+                        > 0
+                })
+                .unwrap_or(false);
+            let user_bookmarked = viewer_id
+                .map(|vid| {
+                    conn.query_row(
+                        "SELECT COUNT(*) FROM user_bookmarks WHERE reel_id = ?1 AND user_id = ?2",
+                        params![rid, vid],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .unwrap_or(0)
+                        > 0
+                })
+                .unwrap_or(false);
+            let raw_video: String = r.get(3)?;
+            Ok(ReelView {
+                id: rid,
+                user_id: r.get(1)?,
+                user_name: profile.name.clone(),
+                user_username: profile.username.clone(),
+                user_avatar: profile.avatar.clone(),
+                user_verified: profile.is_verified,
+                caption: r.get(2)?,
+                video_url: if is_unlocked { raw_video } else { String::new() },
+                cover_url: r.get(4)?,
+                price,
+                is_unlocked,
+                views_count: r.get(6)?,
+                likes_count,
+                comments_count,
+                user_liked,
+                user_bookmarked,
+                created_at: r.get(7)?,
+            })
+        })?
+        .filter_map(Result::ok)
+        .collect();
+
+    // Stories & Highlights for this creator
+    let mut st_stmt = conn.prepare(
+        "SELECT id, user_id, media_url, media_type, caption, bg_preset, is_highlight, views_count, expires_at, created_at
+         FROM stories WHERE user_id = ?1 AND (expires_at >= datetime('now') OR is_highlight = 1)
+         ORDER BY is_highlight DESC, id DESC",
+    )?;
+    let stories: Vec<StoryView> = st_stmt
+        .query_map(params![target_id], |r| {
+            Ok(StoryView {
+                id: r.get(0)?,
+                user_id: r.get(1)?,
+                user_name: profile.name.clone(),
+                user_username: profile.username.clone(),
+                user_avatar: profile.avatar.clone(),
+                user_verified: profile.is_verified,
+                media_url: r.get(2)?,
+                media_type: r.get(3)?,
+                caption: r.get(4)?,
+                bg_preset: r.get(5)?,
+                is_highlight: r.get::<_, i64>(6)? != 0,
+                views_count: r.get(7)?,
+                expires_at: r.get(8)?,
+                created_at: r.get(9)?,
             })
         })?
         .filter_map(Result::ok)
@@ -1012,7 +1344,9 @@ pub async fn get_profile(
         "profile": profile,
         "posts": posts,
         "recent_media": recent_media,
-        "streams": streams
+        "streams": streams,
+        "reels": reels,
+        "stories": stories
     })))
 }
 
@@ -1027,7 +1361,7 @@ pub async fn search_handler(
     OptionalAuthUser(auth): OptionalAuthUser,
     Query(q): Query<SearchQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     let viewer_id = auth.as_ref().map(|a| a.user_id);
     let term = q.query.unwrap_or_default().trim().to_lowercase();
     let filter = q.filter.unwrap_or_else(|| "top".into());
@@ -1045,6 +1379,11 @@ pub async fn search_handler(
         .collect();
     let mut users = Vec::new();
     for uid in uids {
+        if let Some(vid) = viewer_id {
+            if is_blocked_between(&conn, vid, uid) {
+                continue;
+            }
+        }
         if let Ok(p) = get_user_public_profile(&conn, uid, viewer_id) {
             users.push(p);
         }
@@ -1054,7 +1393,10 @@ pub async fn search_handler(
     let mut p_stmt = conn.prepare(
         "SELECT p.id FROM posts p
          JOIN users u ON p.user_id = u.id
-         WHERE p.status = 1 AND (LOWER(p.text) LIKE ?1 OR LOWER(u.name) LIKE ?1 OR LOWER(u.username) LIKE ?1)
+         WHERE p.status = 1
+           AND (p.release_date IS NULL OR p.release_date <= datetime('now'))
+           AND (p.expire_date IS NULL OR p.expire_date >= datetime('now'))
+           AND (LOWER(p.text) LIKE ?1 OR LOWER(u.name) LIKE ?1 OR LOWER(u.username) LIKE ?1)
          ORDER BY p.id DESC LIMIT 30",
     )?;
     let pids: Vec<i64> = p_stmt
@@ -1064,6 +1406,11 @@ pub async fn search_handler(
     let mut posts = Vec::new();
     for pid in pids {
         if let Ok(pv) = build_post_view(&conn, pid, viewer_id) {
+            if let Some(vid) = viewer_id {
+                if is_blocked_between(&conn, vid, pv.user_id) {
+                    continue;
+                }
+            }
             if filter == "photos" && pv.attachments.is_empty() {
                 continue;
             }
@@ -1133,7 +1480,7 @@ pub async fn get_bookmarks(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     let mut stmt = conn.prepare(
         "SELECT post_id FROM user_bookmarks WHERE user_id = ?1 AND post_id IS NOT NULL ORDER BY id DESC",
     )?;
@@ -1161,7 +1508,10 @@ pub async fn get_bookmarks(
     let reels: Vec<ReelView> = r_stmt
         .query_map(params![auth.user_id], |r| {
             let rid: i64 = r.get(0)?;
+            let owner_id: i64 = r.get(1)?;
             let ver: Option<String> = r.get(5)?;
+            let price: f64 = r.get(9)?;
+            let is_unlocked = compute_reel_unlocked(&conn, rid, owner_id, price, Some(auth.user_id));
             let likes_count: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM reactions WHERE reel_id = ?1",
@@ -1184,19 +1534,20 @@ pub async fn get_bookmarks(
                 )
                 .unwrap_or(0)
                 > 0;
+            let raw_video: String = r.get(7)?;
 
             Ok(ReelView {
                 id: rid,
-                user_id: r.get(1)?,
+                user_id: owner_id,
                 user_name: r.get(2)?,
                 user_username: r.get(3)?,
                 user_avatar: r.get(4)?,
                 user_verified: ver.is_some(),
                 caption: r.get(6)?,
-                video_url: r.get(7)?,
+                video_url: if is_unlocked { raw_video } else { String::new() },
                 cover_url: r.get(8)?,
-                price: r.get(9)?,
-                is_unlocked: true,
+                price,
+                is_unlocked,
                 views_count: r.get(10)?,
                 likes_count,
                 comments_count,
@@ -1219,7 +1570,7 @@ pub async fn get_lists(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     let mut stmt = conn.prepare(
         "SELECT id, user_id, name, list_type, created_at FROM user_lists WHERE user_id = ?1 ORDER BY id ASC",
     )?;
@@ -1264,7 +1615,7 @@ pub async fn get_list_detail(
     auth: AuthUser,
     Path(list_id): Path<i64>,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     let list = conn.query_row(
         "SELECT id, user_id, name, list_type, created_at FROM user_lists WHERE id = ?1 AND user_id = ?2",
         params![list_id, auth.user_id],
@@ -1304,6 +1655,7 @@ pub async fn get_list_detail(
 
 #[derive(Deserialize)]
 pub struct SaveListPayload {
+    pub id: Option<i64>,
     pub name: String,
 }
 
@@ -1316,7 +1668,20 @@ pub async fn save_list(
     if name.is_empty() {
         return Err(AppError::Unprocessable("List name is required.".into()));
     }
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
+    if let Some(existing_id) = payload.id {
+        let updated = conn.execute(
+            "UPDATE user_lists SET name = ?1 WHERE id = ?2 AND user_id = ?3 AND list_type = 'custom'",
+            params![name, existing_id, auth.user_id],
+        )?;
+        if updated == 0 {
+            return Err(AppError::Forbidden("Cannot rename this list.".into()));
+        }
+        return Ok(Json(json!({
+            "success": true,
+            "list_id": existing_id
+        })));
+    }
     conn.execute(
         "INSERT INTO user_lists (user_id, name, list_type) VALUES (?1, ?2, 'custom')",
         params![auth.user_id, name],
@@ -1328,12 +1693,68 @@ pub async fn save_list(
     })))
 }
 
+pub async fn rename_list(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(list_id): Path<i64>,
+    Json(payload): Json<SaveListPayload>,
+) -> Result<impl IntoResponse, AppError> {
+    let name = payload.name.trim();
+    if name.is_empty() {
+        return Err(AppError::Unprocessable("List name is required.".into()));
+    }
+    let conn = state.lock_db();
+    let updated = conn.execute(
+        "UPDATE user_lists SET name = ?1 WHERE id = ?2 AND user_id = ?3 AND list_type = 'custom'",
+        params![name, list_id, auth.user_id],
+    )?;
+    if updated == 0 {
+        return Err(AppError::Forbidden("Only custom lists can be renamed.".into()));
+    }
+    Ok(Json(json!({
+        "success": true,
+        "name": name
+    })))
+}
+
+pub async fn clear_list(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(list_id): Path<i64>,
+) -> Result<impl IntoResponse, AppError> {
+    let conn = state.lock_db();
+    let (owner_id, list_type): (i64, String) = conn.query_row(
+        "SELECT user_id, list_type FROM user_lists WHERE id = ?1",
+        params![list_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    if owner_id != auth.user_id {
+        return Err(AppError::Forbidden("Not your list.".into()));
+    }
+    if list_type == "following" {
+        // Also remove auth.user_id from targets' followers lists
+        let mut stmt = conn.prepare("SELECT user_id FROM user_list_members WHERE list_id = ?1")?;
+        let target_ids: Vec<i64> = stmt
+            .query_map(params![list_id], |r| r.get(0))?
+            .filter_map(Result::ok)
+            .collect();
+        for tid in target_ids {
+            let _ = conn.execute(
+                "DELETE FROM user_list_members WHERE user_id = ?1 AND list_id IN (SELECT id FROM user_lists WHERE user_id = ?2 AND list_type = 'followers')",
+                params![auth.user_id, tid],
+            );
+        }
+    }
+    conn.execute("DELETE FROM user_list_members WHERE list_id = ?1", params![list_id])?;
+    Ok(Json(json!({ "success": true })))
+}
+
 pub async fn delete_list(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(list_id): Path<i64>,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     conn.execute(
         "DELETE FROM user_lists WHERE id = ?1 AND user_id = ?2 AND list_type = 'custom'",
         params![list_id, auth.user_id],
@@ -1352,11 +1773,11 @@ pub async fn toggle_list_member(
     auth: AuthUser,
     Json(payload): Json<ListMemberPayload>,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
-    let owner: i64 = conn.query_row(
-        "SELECT user_id FROM user_lists WHERE id = ?1",
+    let conn = state.lock_db();
+    let (owner, list_type): (i64, String) = conn.query_row(
+        "SELECT user_id, list_type FROM user_lists WHERE id = ?1",
         params![payload.list_id],
-        |r| r.get(0),
+        |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
     if owner != auth.user_id {
         return Err(AppError::Forbidden("Not your list.".into()));
@@ -1372,12 +1793,30 @@ pub async fn toggle_list_member(
 
     let added = if let Some(mid) = existing {
         conn.execute("DELETE FROM user_list_members WHERE id = ?1", params![mid])?;
+        if list_type == "following" {
+            let _ = conn.execute(
+                "DELETE FROM user_list_members WHERE user_id = ?1 AND list_id IN (SELECT id FROM user_lists WHERE user_id = ?2 AND list_type = 'followers')",
+                params![auth.user_id, payload.member_user_id],
+            );
+        }
         false
     } else {
         conn.execute(
             "INSERT INTO user_list_members (list_id, user_id) VALUES (?1, ?2)",
             params![payload.list_id, payload.member_user_id],
         )?;
+        if list_type == "following" {
+            if let Ok(target_followers_id) = conn.query_row::<i64, _, _>(
+                "SELECT id FROM user_lists WHERE user_id = ?1 AND list_type = 'followers'",
+                params![payload.member_user_id],
+                |r| r.get(0),
+            ) {
+                let _ = conn.execute(
+                    "INSERT OR IGNORE INTO user_list_members (list_id, user_id) VALUES (?1, ?2)",
+                    params![target_followers_id, auth.user_id],
+                );
+            }
+        }
         true
     };
 
@@ -1397,7 +1836,14 @@ pub async fn toggle_follow(
     auth: AuthUser,
     Json(payload): Json<FollowPayload>,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    if payload.target_user_id == auth.user_id {
+        return Err(AppError::Unprocessable("Cannot follow yourself.".into()));
+    }
+    let conn = state.lock_db();
+    if is_blocked_between(&conn, auth.user_id, payload.target_user_id) {
+        return Err(AppError::Forbidden("Cannot follow a blocked user.".into()));
+    }
+
     let following_list_id: i64 = conn.query_row(
         "SELECT id FROM user_lists WHERE user_id = ?1 AND list_type = 'following'",
         params![auth.user_id],
@@ -1414,18 +1860,81 @@ pub async fn toggle_follow(
 
     let is_following = if let Some(mid) = existing {
         conn.execute("DELETE FROM user_list_members WHERE id = ?1", params![mid])?;
+        let _ = conn.execute(
+            "DELETE FROM user_list_members WHERE user_id = ?1 AND list_id IN (SELECT id FROM user_lists WHERE user_id = ?2 AND list_type = 'followers')",
+            params![auth.user_id, payload.target_user_id],
+        );
         false
     } else {
         conn.execute(
             "INSERT INTO user_list_members (list_id, user_id) VALUES (?1, ?2)",
             params![following_list_id, payload.target_user_id],
         )?;
+        if let Ok(target_followers_id) = conn.query_row::<i64, _, _>(
+            "SELECT id FROM user_lists WHERE user_id = ?1 AND list_type = 'followers'",
+            params![payload.target_user_id],
+            |r| r.get(0),
+        ) {
+            let _ = conn.execute(
+                "INSERT OR IGNORE INTO user_list_members (list_id, user_id) VALUES (?1, ?2)",
+                params![target_followers_id, auth.user_id],
+            );
+        }
         true
     };
 
     Ok(Json(json!({
         "success": true,
         "is_following": is_following
+    })))
+}
+
+pub async fn toggle_block_user(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(payload): Json<FollowPayload>,
+) -> Result<impl IntoResponse, AppError> {
+    if payload.target_user_id == auth.user_id {
+        return Err(AppError::Unprocessable("Cannot block yourself.".into()));
+    }
+    let conn = state.lock_db();
+    let blocked_list_id: i64 = conn.query_row(
+        "SELECT id FROM user_lists WHERE user_id = ?1 AND list_type = 'blocked'",
+        params![auth.user_id],
+        |r| r.get(0),
+    )?;
+
+    let existing: Option<i64> = conn
+        .query_row(
+            "SELECT id FROM user_list_members WHERE list_id = ?1 AND user_id = ?2",
+            params![blocked_list_id, payload.target_user_id],
+            |r| r.get(0),
+        )
+        .ok();
+
+    let is_blocked = if let Some(mid) = existing {
+        conn.execute("DELETE FROM user_list_members WHERE id = ?1", params![mid])?;
+        false
+    } else {
+        conn.execute(
+            "INSERT INTO user_list_members (list_id, user_id) VALUES (?1, ?2)",
+            params![blocked_list_id, payload.target_user_id],
+        )?;
+        // Also remove mutual follow relationships when blocking
+        let _ = conn.execute(
+            "DELETE FROM user_list_members WHERE user_id = ?1 AND list_id IN (SELECT id FROM user_lists WHERE user_id = ?2 AND list_type IN ('following', 'followers'))",
+            params![payload.target_user_id, auth.user_id],
+        );
+        let _ = conn.execute(
+            "DELETE FROM user_list_members WHERE user_id = ?1 AND list_id IN (SELECT id FROM user_lists WHERE user_id = ?2 AND list_type IN ('following', 'followers'))",
+            params![auth.user_id, payload.target_user_id],
+        );
+        true
+    };
+
+    Ok(Json(json!({
+        "success": true,
+        "is_blocked": is_blocked
     })))
 }
 
@@ -1437,7 +1946,7 @@ pub async fn get_messenger_contacts(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     let mut stmt = conn.prepare(
         "SELECT DISTINCT CASE WHEN sender_id = ?1 THEN receiver_id ELSE sender_id END AS contact_id
          FROM user_messages
@@ -1462,6 +1971,9 @@ pub async fn get_messenger_contacts(
 
     let mut contacts = Vec::new();
     for cid in contact_ids {
+        if is_blocked_between(&conn, auth.user_id, cid) {
+            continue;
+        }
         if let Ok(u) = get_user_public_profile(&conn, cid, Some(auth.user_id)) {
             let (last_msg, last_at): (String, String) = conn
                 .query_row(
@@ -1500,12 +2012,54 @@ pub async fn get_messenger_contacts(
     })))
 }
 
+fn load_message_attachments(
+    conn: &rusqlite::Connection,
+    message_id: i64,
+    is_unlocked: bool,
+) -> Vec<Attachment> {
+    let Ok(mut att_stmt) = conn.prepare(
+        "SELECT id, user_id, post_id, message_id, filename, file_url, file_type, file_size, is_vault, is_archived, created_at
+         FROM attachments WHERE message_id = ?1 ORDER BY created_at ASC",
+    ) else {
+        return Vec::new();
+    };
+    att_stmt
+        .query_map(params![message_id], |arow| {
+            let raw_url: String = arow.get(5)?;
+            Ok(Attachment {
+                id: arow.get(0)?,
+                user_id: arow.get(1)?,
+                post_id: arow.get(2)?,
+                message_id: arow.get(3)?,
+                filename: arow.get(4)?,
+                file_url: if is_unlocked {
+                    raw_url
+                } else {
+                    "/img/post-locked.svg".to_string()
+                },
+                file_type: arow.get(6)?,
+                file_size: arow.get(7)?,
+                is_vault: arow.get::<_, i64>(8)? != 0,
+                is_archived: arow.get::<_, i64>(9)? != 0,
+                created_at: arow.get(10)?,
+            })
+        })
+        .map(|rows| rows.filter_map(Result::ok).collect())
+        .unwrap_or_default()
+}
+
 pub async fn get_messages_with_user(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(other_user_id): Path<i64>,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
+
+    if is_blocked_between(&conn, auth.user_id, other_user_id) {
+        return Err(AppError::Forbidden(
+            "Conversation unavailable because one of you has blocked the other.".into(),
+        ));
+    }
 
     // Mark messages from other_user_id as seen
     conn.execute(
@@ -1548,6 +2102,8 @@ pub async fn get_messages_with_user(
                 "🔒 Locked Pay-Per-View Message — Unlock to view".into()
             };
 
+            let attachments = load_message_attachments(&conn, mid, is_unlocked);
+
             Ok(MessageView {
                 id: mid,
                 sender_id,
@@ -1560,7 +2116,7 @@ pub async fn get_messages_with_user(
                 is_unlocked,
                 is_seen: r.get::<_, i64>(8)? != 0,
                 is_pinned: r.get::<_, i64>(9)? != 0,
-                attachments: Vec::new(),
+                attachments,
                 created_at: r.get(10)?,
             })
         })?
@@ -1581,6 +2137,7 @@ pub struct SendMessagePayload {
     pub receiver_id: i64,
     pub message: String,
     pub price: Option<f64>,
+    pub attachments: Option<Vec<String>>,
 }
 
 pub async fn send_message(
@@ -1588,18 +2145,56 @@ pub async fn send_message(
     auth: AuthUser,
     Json(payload): Json<SendMessagePayload>,
 ) -> Result<impl IntoResponse, AppError> {
-    let msg = payload.message.trim();
-    if msg.is_empty() {
-        return Err(AppError::Unprocessable("Message cannot be empty.".into()));
+    if payload.receiver_id == auth.user_id {
+        return Err(AppError::Unprocessable("Cannot send a message to yourself.".into()));
     }
-    let price = payload.price.unwrap_or(0.0).max(0.0);
-    let conn = state.db.lock().unwrap();
+    let msg = payload.message.trim();
+    let attachment_inputs = payload.attachments.clone().unwrap_or_default();
+    if msg.is_empty() && attachment_inputs.is_empty() {
+        return Err(AppError::Unprocessable(
+            "Message must contain text or at least one attachment.".into(),
+        ));
+    }
+    let price = round_money(payload.price.unwrap_or(0.0).max(0.0));
+    let conn = state.lock_db();
+
+    if is_blocked_between(&conn, auth.user_id, payload.receiver_id) {
+        return Err(AppError::Forbidden(
+            "Cannot send messages to this user due to block settings.".into(),
+        ));
+    }
+
+    let final_msg = if msg.is_empty() {
+        "📎 Sent media attachment".to_string()
+    } else {
+        msg.to_string()
+    };
 
     conn.execute(
         "INSERT INTO user_messages (sender_id, receiver_id, message, price) VALUES (?1, ?2, ?3, ?4)",
-        params![auth.user_id, payload.receiver_id, msg, price],
+        params![auth.user_id, payload.receiver_id, final_msg, price],
     )?;
     let mid = conn.last_insert_rowid();
+
+    for item in attachment_inputs {
+        let updated = conn.execute(
+            "UPDATE attachments SET message_id = ?1 WHERE (id = ?2 OR file_url = ?2) AND user_id = ?3",
+            params![mid, item, auth.user_id],
+        )?;
+        if updated == 0 && (item.starts_with('/') || item.starts_with("http")) {
+            let new_att_id = Uuid::new_v4().to_string();
+            let ftype = if item.ends_with(".mp4") || item.ends_with(".webm") {
+                "video"
+            } else {
+                "image"
+            };
+            conn.execute(
+                "INSERT INTO attachments (id, user_id, message_id, filename, file_url, file_type, file_size)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1024)",
+                params![new_att_id, auth.user_id, mid, "message-media", item, ftype],
+            )?;
+        }
+    }
 
     let _ = conn.execute(
         "INSERT INTO notifications (id, from_user_id, to_user_id, notification_type, message)
@@ -1613,6 +2208,7 @@ pub async fn send_message(
     );
 
     let sender = get_user_public_profile(&conn, auth.user_id, Some(auth.user_id))?;
+    let attachments = load_message_attachments(&conn, mid, true);
 
     Ok(Json(json!({
         "success": true,
@@ -1623,14 +2219,39 @@ pub async fn send_message(
             sender_name: sender.name,
             sender_username: sender.username,
             sender_avatar: sender.avatar,
-            message: msg.to_string(),
+            message: final_msg,
             price,
             is_unlocked: true,
             is_seen: false,
             is_pinned: false,
-            attachments: Vec::new(),
+            attachments,
             created_at: "Just now".into(),
         }
+    })))
+}
+
+pub async fn toggle_pin_message(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(message_id): Path<i64>,
+) -> Result<impl IntoResponse, AppError> {
+    let conn = state.lock_db();
+    let (sender_id, receiver_id, current_pin): (i64, i64, i64) = conn.query_row(
+        "SELECT sender_id, receiver_id, is_pinned FROM user_messages WHERE id = ?1",
+        params![message_id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
+    if sender_id != auth.user_id && receiver_id != auth.user_id {
+        return Err(AppError::Forbidden("Not a participant in this conversation.".into()));
+    }
+    let next_pin = if current_pin == 0 { 1 } else { 0 };
+    conn.execute(
+        "UPDATE user_messages SET is_pinned = ?1 WHERE id = ?2",
+        params![next_pin, message_id],
+    )?;
+    Ok(Json(json!({
+        "success": true,
+        "is_pinned": next_pin != 0
     })))
 }
 
@@ -1639,10 +2260,31 @@ pub async fn delete_message(
     auth: AuthUser,
     Path(message_id): Path<i64>,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
+    let sender_id: i64 = conn.query_row(
+        "SELECT sender_id FROM user_messages WHERE id = ?1",
+        params![message_id],
+        |r| r.get(0),
+    )?;
+    if sender_id != auth.user_id && auth.role_id != 1 {
+        return Err(AppError::Forbidden("Only the sender can delete this message.".into()));
+    }
+    let was_purchased: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM transactions WHERE message_id = ?1 AND tx_type = 'message-unlock' AND status = 'approved'",
+            params![message_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    if was_purchased > 0 {
+        return Err(AppError::Unprocessable(
+            "Cannot delete a Pay-Per-View message that has already been purchased by the recipient.".into(),
+        ));
+    }
+    conn.execute("UPDATE attachments SET message_id = NULL WHERE message_id = ?1", params![message_id])?;
     conn.execute(
-        "DELETE FROM user_messages WHERE id = ?1 AND sender_id = ?2",
-        params![message_id, auth.user_id],
+        "DELETE FROM user_messages WHERE id = ?1",
+        params![message_id],
     )?;
     Ok(Json(json!({ "success": true })))
 }
@@ -1661,7 +2303,7 @@ pub async fn get_notifications(
     auth: AuthUser,
     Query(q): Query<NotificationsQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     let filter = q.filter.unwrap_or_default();
 
     // Mark all as read when fetched
@@ -1711,11 +2353,12 @@ pub async fn get_notifications(
 
 #[derive(Deserialize)]
 pub struct InitiatePaymentPayload {
-    pub payment_type: String, // "deposit", "subscription", "tip", "post-unlock", "message-unlock", "stream-unlock"
+    pub payment_type: String, // "deposit", "subscription", "tip", "post-unlock", "message-unlock", "stream-unlock", "reel-unlock"
     pub recipient_user_id: Option<i64>,
     pub post_id: Option<i64>,
     pub message_id: Option<i64>,
     pub stream_id: Option<i64>,
+    pub reel_id: Option<i64>,
     pub amount: Option<f64>,
     pub provider: Option<String>, // "credit", "stripe", "paypal"
     pub months: Option<i64>,
@@ -1726,38 +2369,60 @@ pub async fn initiate_payment(
     auth: AuthUser,
     Json(payload): Json<InitiatePaymentPayload>,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
-    let provider = payload.provider.unwrap_or_else(|| "credit".into());
+    let mut conn = state.lock_db();
+    let raw_provider = payload
+        .provider
+        .unwrap_or_else(|| "credit".into())
+        .trim()
+        .to_lowercase();
+    let provider = match raw_provider.as_str() {
+        "wallet" | "credit" | "" => "credit".to_string(),
+        "stripe" | "paypal" | "crypto" | "ccbill" => raw_provider,
+        other => {
+            return Err(AppError::BadRequest(format!(
+                "Unsupported payment provider: {other}"
+            )))
+        }
+    };
     let ptype = payload.payment_type.trim();
 
     if ptype == "deposit" {
-        let amt = payload.amount.unwrap_or(0.0);
-        if amt <= 0.0 {
+        let amt = round_money(payload.amount.unwrap_or(0.0));
+        if amt <= 0.0 || !amt.is_finite() {
             return Err(AppError::Unprocessable("Deposit amount must be positive.".into()));
         }
-        conn.execute(
-            "UPDATE wallets SET total = total + ?1, updated_at = datetime('now') WHERE user_id = ?2",
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let next_inv: i64 = tx
+            .query_row(
+                "SELECT COALESCE(MAX(invoice_id), 1000) + 1 FROM transactions",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(1001);
+        tx.execute(
+            "UPDATE wallets SET total = ROUND(total + ?1, 2), updated_at = datetime('now') WHERE user_id = ?2",
             params![amt, auth.user_id],
         )?;
-        conn.execute(
-            "INSERT INTO transactions (sender_user_id, recipient_user_id, tx_type, status, amount, payment_provider)
-             VALUES (?1, ?1, 'deposit', 'approved', ?2, ?3)",
-            params![auth.user_id, amt, provider],
+        tx.execute(
+            "INSERT INTO transactions (sender_user_id, recipient_user_id, tx_type, status, amount, payment_provider, invoice_id)
+             VALUES (?1, ?1, 'deposit', 'approved', ?2, ?3, ?4)",
+            params![auth.user_id, amt, provider, next_inv],
         )?;
-        let new_balance: f64 = conn.query_row(
+        let new_balance: f64 = tx.query_row(
             "SELECT total FROM wallets WHERE user_id = ?1",
             params![auth.user_id],
             |r| r.get(0),
         )?;
+        tx.commit()?;
         return Ok(Json(json!({
             "success": true,
             "message": format!("${:.2} deposited into your wallet!", amt),
-            "wallet_balance": new_balance
+            "wallet_balance": round_money(new_balance)
         })));
     }
 
     // Determine price and recipient
-    let (amount, recipient_id) = match ptype {
+    let (raw_amount, recipient_id) = match ptype {
         "subscription" => {
             let rec_id = payload
                 .recipient_user_id
@@ -1799,6 +2464,9 @@ pub async fn initiate_payment(
                 params![pid],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )?;
+            if rec_id == auth.user_id {
+                return Err(AppError::Unprocessable("You already own this post.".into()));
+            }
             let already_unlocked: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM transactions WHERE sender_user_id = ?1 AND post_id = ?2 AND tx_type = 'post-unlock' AND status = 'approved'",
@@ -1820,6 +2488,9 @@ pub async fn initiate_payment(
                 params![mid],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )?;
+            if rec_id == auth.user_id {
+                return Err(AppError::Unprocessable("You sent this message.".into()));
+            }
             let already_unlocked: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM transactions WHERE sender_user_id = ?1 AND message_id = ?2 AND tx_type = 'message-unlock' AND status = 'approved'",
@@ -1841,6 +2512,9 @@ pub async fn initiate_payment(
                 params![sid],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )?;
+            if rec_id == auth.user_id {
+                return Err(AppError::Unprocessable("You own this stream.".into()));
+            }
             let already_unlocked: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM transactions WHERE sender_user_id = ?1 AND stream_id = ?2 AND tx_type = 'stream-unlock' AND status = 'approved'",
@@ -1850,6 +2524,30 @@ pub async fn initiate_payment(
                 .unwrap_or(0);
             if already_unlocked > 0 {
                 return Err(AppError::Unprocessable("Stream is already unlocked.".into()));
+            }
+            (price, rec_id)
+        }
+        "reel-unlock" => {
+            let rid = payload
+                .reel_id
+                .ok_or_else(|| AppError::BadRequest("reel_id required".into()))?;
+            let (rec_id, price): (i64, f64) = conn.query_row(
+                "SELECT user_id, price FROM reels WHERE id = ?1",
+                params![rid],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            if rec_id == auth.user_id {
+                return Err(AppError::Unprocessable("You own this reel.".into()));
+            }
+            let already_unlocked: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM transactions WHERE sender_user_id = ?1 AND reel_id = ?2 AND tx_type = 'reel-unlock' AND status = 'approved'",
+                    params![auth.user_id, rid],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            if already_unlocked > 0 {
+                return Err(AppError::Unprocessable("Reel is already unlocked.".into()));
             }
             (price, rec_id)
         }
@@ -1867,6 +2565,9 @@ pub async fn initiate_payment(
             } else {
                 return Err(AppError::BadRequest("recipient_user_id or post_id required".into()));
             };
+            if rec_id == auth.user_id {
+                return Err(AppError::Unprocessable("Cannot tip yourself.".into()));
+            }
             (amt, rec_id)
         }
         _ => {
@@ -1876,9 +2577,16 @@ pub async fn initiate_payment(
         }
     };
 
+    if is_blocked_between(&conn, auth.user_id, recipient_id) {
+        return Err(AppError::Forbidden("Transaction unavailable due to block settings.".into()));
+    }
+
+    let amount = round_money(raw_amount);
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+
     // Deduct from wallet if using credit
     if provider == "credit" && amount > 0.0 {
-        let sender_balance: f64 = conn
+        let sender_balance: f64 = tx
             .query_row(
                 "SELECT total FROM wallets WHERE user_id = ?1",
                 params![auth.user_id],
@@ -1890,23 +2598,23 @@ pub async fn initiate_payment(
                 "Insufficient wallet balance (${sender_balance:.2} available, ${amount:.2} required). Please deposit funds or choose Stripe/PayPal."
             )));
         }
-        conn.execute(
-            "UPDATE wallets SET total = total - ?1, updated_at = datetime('now') WHERE user_id = ?2",
+        tx.execute(
+            "UPDATE wallets SET total = ROUND(total - ?1, 2), updated_at = datetime('now') WHERE user_id = ?2",
             params![amount, auth.user_id],
         )?;
     }
 
     // Credit recipient wallet (minus 15% platform fee)
     if amount > 0.0 {
-        let creator_share = (amount * 0.85 * 100.0).round() / 100.0;
-        conn.execute(
-            "UPDATE wallets SET total = total + ?1, updated_at = datetime('now') WHERE user_id = ?2",
+        let creator_share = round_money(amount * 0.85);
+        tx.execute(
+            "UPDATE wallets SET total = ROUND(total + ?1, 2), updated_at = datetime('now') WHERE user_id = ?2",
             params![creator_share, recipient_id],
         )?;
     }
 
     // Record transaction with generated invoice_id
-    let next_invoice_id: i64 = conn
+    let next_invoice_id: i64 = tx
         .query_row(
             "SELECT COALESCE(MAX(invoice_id), 1000) + 1 FROM transactions",
             [],
@@ -1914,9 +2622,9 @@ pub async fn initiate_payment(
         )
         .unwrap_or(1001);
 
-    conn.execute(
-        "INSERT INTO transactions (sender_user_id, recipient_user_id, tx_type, status, amount, payment_provider, post_id, message_id, stream_id, invoice_id)
-         VALUES (?1, ?2, ?3, 'approved', ?4, ?5, ?6, ?7, ?8, ?9)",
+    tx.execute(
+        "INSERT INTO transactions (sender_user_id, recipient_user_id, tx_type, status, amount, payment_provider, post_id, message_id, stream_id, reel_id, invoice_id)
+         VALUES (?1, ?2, ?3, 'approved', ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             auth.user_id,
             recipient_id,
@@ -1926,13 +2634,14 @@ pub async fn initiate_payment(
             payload.post_id,
             payload.message_id,
             payload.stream_id,
+            payload.reel_id,
             next_invoice_id
         ],
     )?;
 
     if ptype == "subscription" {
         let days = payload.months.unwrap_or(1) * 30;
-        conn.execute(
+        tx.execute(
             "INSERT INTO subscriptions (sender_user_id, recipient_user_id, amount, provider, status, expires_at)
              VALUES (?1, ?2, ?3, ?4, 'completed', datetime('now', ?5))",
             params![
@@ -1952,9 +2661,10 @@ pub async fn initiate_payment(
             "tip" => format!("@{} sent you a ${amount:.2} tip!", auth.username),
             "post-unlock" => format!("@{} unlocked your PPV post for ${amount:.2}", auth.username),
             "message-unlock" => format!("@{} unlocked your PPV message for ${amount:.2}", auth.username),
+            "reel-unlock" => format!("@{} unlocked your Reel for ${amount:.2}", auth.username),
             _ => format!("@{} sent a ${amount:.2} payment", auth.username),
         };
-        let _ = conn.execute(
+        let _ = tx.execute(
             "INSERT INTO notifications (id, from_user_id, to_user_id, notification_type, post_id, message)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
@@ -1968,7 +2678,7 @@ pub async fn initiate_payment(
         );
     }
 
-    let updated_balance: f64 = conn
+    let updated_balance: f64 = tx
         .query_row(
             "SELECT total FROM wallets WHERE user_id = ?1",
             params![auth.user_id],
@@ -1976,10 +2686,12 @@ pub async fn initiate_payment(
         )
         .unwrap_or(0.0);
 
+    tx.commit()?;
+
     Ok(Json(json!({
         "success": true,
         "message": "Payment processed successfully!",
-        "wallet_balance": updated_balance
+        "wallet_balance": round_money(updated_balance)
     })))
 }
 
@@ -1988,7 +2700,7 @@ pub async fn cancel_subscription(
     auth: AuthUser,
     Path(sub_id): Path<i64>,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     conn.execute(
         "UPDATE subscriptions SET status = 'canceled' WHERE id = ?1 AND (sender_user_id = ?2 OR recipient_user_id = ?2)",
         params![sub_id, auth.user_id],
@@ -2012,13 +2724,15 @@ pub async fn request_withdrawal(
     auth: AuthUser,
     Json(payload): Json<WithdrawalRequestPayload>,
 ) -> Result<impl IntoResponse, AppError> {
-    if payload.amount < 20.0 {
+    let amount = round_money(payload.amount);
+    if amount < 20.0 || !amount.is_finite() {
         return Err(AppError::Unprocessable(
             "Minimum withdrawal amount is $20.00.".into(),
         ));
     }
-    let conn = state.db.lock().unwrap();
-    let balance: f64 = conn
+    let mut conn = state.lock_db();
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let balance: f64 = tx
         .query_row(
             "SELECT total FROM wallets WHERE user_id = ?1",
             params![auth.user_id],
@@ -2026,39 +2740,40 @@ pub async fn request_withdrawal(
         )
         .unwrap_or(0.0);
 
-    if balance < payload.amount {
+    if balance < amount {
         return Err(AppError::Unprocessable(
             "Requested amount exceeds available wallet balance.".into(),
         ));
     }
 
-    conn.execute(
-        "UPDATE wallets SET total = total - ?1, updated_at = datetime('now') WHERE user_id = ?2",
-        params![payload.amount, auth.user_id],
+    tx.execute(
+        "UPDATE wallets SET total = ROUND(total - ?1, 2), updated_at = datetime('now') WHERE user_id = ?2",
+        params![amount, auth.user_id],
     )?;
 
-    conn.execute(
+    tx.execute(
         "INSERT INTO withdrawals (user_id, amount, status, payment_method, payment_identifier, message)
          VALUES (?1, ?2, 'requested', ?3, ?4, ?5)",
         params![
             auth.user_id,
-            payload.amount,
+            amount,
             payload.payment_method.unwrap_or_else(|| "Bank Transfer".into()),
             payload.payment_identifier.unwrap_or_default(),
             payload.message.unwrap_or_default()
         ],
     )?;
 
-    let new_balance: f64 = conn.query_row(
+    let new_balance: f64 = tx.query_row(
         "SELECT total FROM wallets WHERE user_id = ?1",
         params![auth.user_id],
         |r| r.get(0),
     )?;
+    tx.commit()?;
 
     Ok(Json(json!({
         "success": true,
         "message": "Withdrawal request submitted for review.",
-        "wallet_balance": new_balance
+        "wallet_balance": round_money(new_balance)
     })))
 }
 
@@ -2070,7 +2785,7 @@ pub async fn get_settings_data(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     let profile = get_user_public_profile(&conn, auth.user_id, Some(auth.user_id))?;
 
     // Active & past subscriptions
@@ -2179,13 +2894,56 @@ pub async fn get_settings_data(
         )
         .ok();
 
+    let billing: Option<Value> = conn
+        .query_row(
+            "SELECT first_name, last_name, billing_address, city, country, state, postcode FROM users WHERE id = ?1",
+            params![auth.user_id],
+            |r| {
+                Ok(json!({
+                    "first_name": r.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                    "last_name": r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    "billing_address": r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                    "city": r.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                    "country": r.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                    "state": r.get::<_, Option<String>>(5)?.unwrap_or_default(),
+                    "postcode": r.get::<_, Option<String>>(6)?.unwrap_or_default(),
+                }))
+            },
+        )
+        .ok();
+
+    let mut ref_stmt = conn.prepare(
+        "SELECT r.id, r.referred_user_id, u.name, u.username, u.avatar, r.referral_code, r.bonus_amount, r.created_at
+         FROM referrals r
+         JOIN users u ON r.referred_user_id = u.id
+         WHERE r.referrer_user_id = ?1
+         ORDER BY r.id DESC",
+    )?;
+    let referrals: Vec<Value> = ref_stmt
+        .query_map(params![auth.user_id], |r| {
+            Ok(json!({
+                "id": r.get::<_, i64>(0)?,
+                "used_by_user_id": r.get::<_, i64>(1)?,
+                "used_by_name": r.get::<_, String>(2)?,
+                "used_by_username": r.get::<_, String>(3)?,
+                "used_by_avatar": r.get::<_, String>(4)?,
+                "referral_code": r.get::<_, String>(5)?,
+                "bonus_amount": r.get::<_, f64>(6)?,
+                "created_at": r.get::<_, String>(7)?,
+            }))
+        })?
+        .filter_map(Result::ok)
+        .collect();
+
     Ok(Json(json!({
         "success": true,
         "profile": profile,
         "subscriptions": subscriptions,
         "transactions": transactions,
         "withdrawals": withdrawals,
-        "verification": verification
+        "verification": verification,
+        "billing": billing,
+        "referrals": referrals
     })))
 }
 
@@ -2211,7 +2969,7 @@ pub async fn submit_verification_request(
         ));
     }
     let files_json = serde_json::to_string(&clean_files).unwrap_or_else(|_| "[]".into());
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     conn.execute(
         "INSERT INTO user_verifies (user_id, status, files, rejection_reason)
          VALUES (?1, 'pending', ?2, NULL)
@@ -2256,7 +3014,7 @@ pub async fn update_profile_settings(
         return Err(AppError::Unprocessable("Name and valid username are required.".into()));
     }
 
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     let existing: i64 = conn.query_row(
         "SELECT COUNT(*) FROM users WHERE username = ?1 AND id != ?2",
         params![username, auth.user_id],
@@ -2315,7 +3073,7 @@ pub async fn update_rates_settings(
     auth: AuthUser,
     Json(payload): Json<UpdateRatesPayload>,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     conn.execute(
         "UPDATE users SET
             paid_profile = ?1,
@@ -2328,10 +3086,10 @@ pub async fn update_rates_settings(
         params![
             if payload.paid_profile { 1 } else { 0 },
             if payload.open_profile { 1 } else { 0 },
-            payload.profile_access_price.max(0.0),
-            payload.profile_access_price_3_months.max(0.0),
-            payload.profile_access_price_6_months.max(0.0),
-            payload.profile_access_price_12_months.max(0.0),
+            round_money(payload.profile_access_price.max(0.0)),
+            round_money(payload.profile_access_price_3_months.max(0.0)),
+            round_money(payload.profile_access_price_6_months.max(0.0)),
+            round_money(payload.profile_access_price_12_months.max(0.0)),
             auth.user_id
         ],
     )?;
@@ -2347,6 +3105,13 @@ pub async fn update_rates_settings(
 pub struct UpdateAccountPayload {
     pub email: Option<String>,
     pub new_password: Option<String>,
+    pub first_name: Option<String>,
+    pub last_name: Option<String>,
+    pub billing_address: Option<String>,
+    pub city: Option<String>,
+    pub country: Option<String>,
+    pub state: Option<String>,
+    pub postcode: Option<String>,
 }
 
 pub async fn update_account_settings(
@@ -2354,7 +3119,7 @@ pub async fn update_account_settings(
     auth: AuthUser,
     Json(payload): Json<UpdateAccountPayload>,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     if let Some(email) = payload.email {
         let clean_email = email.trim().to_lowercase();
         if !clean_email.is_empty() {
@@ -2385,9 +3150,39 @@ pub async fn update_account_settings(
             )?;
         }
     }
+    if payload.first_name.is_some()
+        || payload.last_name.is_some()
+        || payload.billing_address.is_some()
+        || payload.city.is_some()
+        || payload.country.is_some()
+        || payload.state.is_some()
+        || payload.postcode.is_some()
+    {
+        conn.execute(
+            "UPDATE users SET
+                first_name = COALESCE(?1, first_name),
+                last_name = COALESCE(?2, last_name),
+                billing_address = COALESCE(?3, billing_address),
+                city = COALESCE(?4, city),
+                country = COALESCE(?5, country),
+                state = COALESCE(?6, state),
+                postcode = COALESCE(?7, postcode)
+             WHERE id = ?8",
+            params![
+                payload.first_name.map(|s| s.trim().to_string()),
+                payload.last_name.map(|s| s.trim().to_string()),
+                payload.billing_address.map(|s| s.trim().to_string()),
+                payload.city.map(|s| s.trim().to_string()),
+                payload.country.map(|s| s.trim().to_string()),
+                payload.state.map(|s| s.trim().to_string()),
+                payload.postcode.map(|s| s.trim().to_string()),
+                auth.user_id
+            ],
+        )?;
+    }
     Ok(Json(json!({
         "success": true,
-        "message": "Account security settings updated."
+        "message": "Account security & billing settings updated."
     })))
 }
 
@@ -2403,7 +3198,7 @@ pub async fn update_privacy_settings(
     auth: AuthUser,
     Json(payload): Json<UpdatePrivacyPayload>,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     conn.execute(
         "UPDATE users SET public_profile = ?1, enable_2fa = ?2, enable_geoblocking = ?3 WHERE id = ?4",
         params![
@@ -2427,7 +3222,7 @@ pub async fn get_vault_items(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     let mut stmt = conn.prepare(
         "SELECT id, user_id, post_id, message_id, filename, file_url, file_type, file_size, is_vault, is_archived, created_at
          FROM attachments WHERE user_id = ?1 ORDER BY created_at DESC",
@@ -2514,7 +3309,7 @@ pub async fn upload_attachment(
         let file_url = format!("/uploads/{stored_filename}");
         let file_size = data.len() as i64;
 
-        let conn = state.db.lock().unwrap();
+        let conn = state.lock_db();
         conn.execute(
             "INSERT INTO attachments (id, user_id, filename, file_url, file_type, file_size, is_vault)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)",
@@ -2542,12 +3337,50 @@ pub async fn upload_attachment(
     })))
 }
 
+pub async fn toggle_archive_vault_item(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(att_id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    let conn = state.lock_db();
+    let (owner_id, current_arch): (i64, i64) = conn.query_row(
+        "SELECT user_id, is_archived FROM attachments WHERE id = ?1",
+        params![att_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    if owner_id != auth.user_id && auth.role_id != 1 {
+        return Err(AppError::Forbidden("Not your vault item.".into()));
+    }
+    let next_arch = if current_arch == 0 { 1 } else { 0 };
+    conn.execute(
+        "UPDATE attachments SET is_archived = ?1 WHERE id = ?2",
+        params![next_arch, att_id],
+    )?;
+    Ok(Json(json!({
+        "success": true,
+        "is_archived": next_arch != 0
+    })))
+}
+
 pub async fn delete_vault_item(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(att_id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
+    let (owner_id, post_id, message_id): (i64, Option<i64>, Option<i64>) = conn.query_row(
+        "SELECT user_id, post_id, message_id FROM attachments WHERE id = ?1",
+        params![att_id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
+    if owner_id != auth.user_id && auth.role_id != 1 {
+        return Err(AppError::Forbidden("Not your vault item.".into()));
+    }
+    if post_id.is_some() || message_id.is_some() {
+        return Err(AppError::Unprocessable(
+            "This file is currently attached to a published post or message. Archive it instead or remove the post first.".into(),
+        ));
+    }
     conn.execute(
         "DELETE FROM attachments WHERE id = ?1 AND user_id = ?2",
         params![att_id, auth.user_id],
@@ -2563,7 +3396,7 @@ pub async fn get_reels(
     State(state): State<AppState>,
     OptionalAuthUser(auth): OptionalAuthUser,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     let viewer_id = auth.as_ref().map(|a| a.user_id);
 
     let mut stmt = conn.prepare(
@@ -2576,7 +3409,10 @@ pub async fn get_reels(
     let reels: Vec<ReelView> = stmt
         .query_map([], |r| {
             let rid: i64 = r.get(0)?;
+            let owner_id: i64 = r.get(1)?;
             let ver: Option<String> = r.get(5)?;
+            let price: f64 = r.get(9)?;
+            let is_unlocked = compute_reel_unlocked(&conn, rid, owner_id, price, viewer_id);
             let likes_count: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM reactions WHERE reel_id = ?1",
@@ -2613,19 +3449,20 @@ pub async fn get_reels(
                         > 0
                 })
                 .unwrap_or(false);
+            let raw_video: String = r.get(7)?;
 
             Ok(ReelView {
                 id: rid,
-                user_id: r.get(1)?,
+                user_id: owner_id,
                 user_name: r.get(2)?,
                 user_username: r.get(3)?,
                 user_avatar: r.get(4)?,
                 user_verified: ver.is_some(),
                 caption: r.get(6)?,
-                video_url: r.get(7)?,
+                video_url: if is_unlocked { raw_video } else { String::new() },
                 cover_url: r.get(8)?,
-                price: r.get(9)?,
-                is_unlocked: true,
+                price,
+                is_unlocked,
                 views_count: r.get(10)?,
                 likes_count,
                 comments_count,
@@ -2635,6 +3472,13 @@ pub async fn get_reels(
             })
         })?
         .filter_map(Result::ok)
+        .filter(|rv| {
+            if let Some(vid) = viewer_id {
+                !is_blocked_between(&conn, vid, rv.user_id)
+            } else {
+                true
+            }
+        })
         .collect();
 
     Ok(Json(json!({
@@ -2646,8 +3490,11 @@ pub async fn get_reels(
 #[derive(Deserialize)]
 pub struct CreateReelPayload {
     pub caption: String,
+    #[serde(alias = "video_path")]
     pub video_url: Option<String>,
+    #[serde(alias = "cover_path")]
     pub cover_url: Option<String>,
+    pub price: Option<f64>,
 }
 
 pub async fn create_reel(
@@ -2655,20 +3502,41 @@ pub async fn create_reel(
     auth: AuthUser,
     Json(payload): Json<CreateReelPayload>,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     let vurl = payload
         .video_url
+        .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| "/img/video-loading-spinner.mp4".into());
     let curl = payload
         .cover_url
+        .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| "/img/home-scene-1.svg".into());
+    let price = round_money(payload.price.unwrap_or(0.0).max(0.0));
     conn.execute(
-        "INSERT INTO reels (user_id, caption, video_url, cover_url) VALUES (?1, ?2, ?3, ?4)",
-        params![auth.user_id, payload.caption.trim(), vurl, curl],
+        "INSERT INTO reels (user_id, caption, video_url, cover_url, price) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![auth.user_id, payload.caption.trim(), vurl, curl, price],
     )?;
     Ok(Json(json!({
         "success": true,
         "reel_id": conn.last_insert_rowid()
+    })))
+}
+
+pub async fn increment_reel_view(
+    State(state): State<AppState>,
+    Path(reel_id): Path<i64>,
+) -> Result<impl IntoResponse, AppError> {
+    let conn = state.lock_db();
+    conn.execute(
+        "UPDATE reels SET views_count = views_count + 1 WHERE id = ?1",
+        params![reel_id],
+    )?;
+    let views_count: i64 = conn
+        .query_row("SELECT views_count FROM reels WHERE id = ?1", params![reel_id], |r| r.get(0))
+        .unwrap_or(0);
+    Ok(Json(json!({
+        "success": true,
+        "views_count": views_count
     })))
 }
 
@@ -2677,7 +3545,7 @@ pub async fn delete_reel(
     auth: AuthUser,
     Path(reel_id): Path<i64>,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     let owner_id: i64 = conn.query_row(
         "SELECT user_id FROM reels WHERE id = ?1",
         params![reel_id],
@@ -2694,7 +3562,7 @@ pub async fn get_reel_comments(
     State(state): State<AppState>,
     Path(reel_id): Path<i64>,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     let mut stmt = conn.prepare(
         "SELECT rc.id, rc.reel_id, rc.user_id, u.name, u.username, u.avatar, u.identity_verified_at, rc.message, rc.created_at
          FROM reel_comments rc
@@ -2741,7 +3609,19 @@ pub async fn add_reel_comment(
     if msg.is_empty() {
         return Err(AppError::Unprocessable("Comment cannot be empty.".into()));
     }
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
+    let (owner_id, price): (i64, f64) = conn.query_row(
+        "SELECT user_id, price FROM reels WHERE id = ?1",
+        params![payload.reel_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    if is_blocked_between(&conn, auth.user_id, owner_id) {
+        return Err(AppError::Forbidden("Cannot comment on this creator's reel.".into()));
+    }
+    if !compute_reel_unlocked(&conn, payload.reel_id, owner_id, price, Some(auth.user_id)) {
+        return Err(AppError::Forbidden("Unlock this reel before commenting.".into()));
+    }
+
     conn.execute(
         "INSERT INTO reel_comments (reel_id, user_id, message) VALUES (?1, ?2, ?3)",
         params![payload.reel_id, auth.user_id, msg],
@@ -2765,10 +3645,30 @@ pub async fn add_reel_comment(
     })))
 }
 
+pub async fn delete_reel_comment(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(comment_id): Path<i64>,
+) -> Result<impl IntoResponse, AppError> {
+    let conn = state.lock_db();
+    let (comment_user_id, reel_owner_id): (i64, i64) = conn.query_row(
+        "SELECT rc.user_id, r.user_id FROM reel_comments rc JOIN reels r ON rc.reel_id = r.id WHERE rc.id = ?1",
+        params![comment_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    if comment_user_id != auth.user_id && reel_owner_id != auth.user_id && auth.role_id != 1 {
+        return Err(AppError::Forbidden("Not authorized to delete this comment.".into()));
+    }
+    conn.execute("DELETE FROM reel_comments WHERE id = ?1", params![comment_id])?;
+    Ok(Json(json!({ "success": true })))
+}
+
 pub async fn get_stories(
     State(state): State<AppState>,
+    OptionalAuthUser(auth): OptionalAuthUser,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
+    let viewer_id = auth.as_ref().map(|a| a.user_id);
     let mut stmt = conn.prepare(
         "SELECT s.id, s.user_id, u.name, u.username, u.avatar, u.identity_verified_at,
                 s.media_url, s.media_type, s.caption, s.bg_preset, s.is_highlight, s.views_count, s.expires_at, s.created_at
@@ -2798,6 +3698,13 @@ pub async fn get_stories(
             })
         })?
         .filter_map(Result::ok)
+        .filter(|st| {
+            if let Some(vid) = viewer_id {
+                !is_blocked_between(&conn, vid, st.user_id)
+            } else {
+                true
+            }
+        })
         .collect();
 
     Ok(Json(json!({
@@ -2810,6 +3717,7 @@ pub async fn get_stories(
 pub struct CreateStoryPayload {
     pub caption: String,
     pub media_url: Option<String>,
+    pub media_type: Option<String>,
     pub bg_preset: Option<String>,
     pub is_highlight: Option<bool>,
 }
@@ -2819,10 +3727,17 @@ pub async fn create_story(
     auth: AuthUser,
     Json(payload): Json<CreateStoryPayload>,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
-    let murl = payload
-        .media_url
-        .unwrap_or_else(|| "/img/home-scene-1.svg".into());
+    let conn = state.lock_db();
+    let murl = payload.media_url.unwrap_or_default().trim().to_string();
+    let mtype = payload.media_type.unwrap_or_else(|| {
+        if murl.ends_with(".mp4") || murl.ends_with(".webm") {
+            "video".into()
+        } else if murl.is_empty() {
+            "text".into()
+        } else {
+            "image".into()
+        }
+    });
     let preset = payload
         .bg_preset
         .unwrap_or_else(|| "gradient-purple".into());
@@ -2832,14 +3747,82 @@ pub async fn create_story(
         0
     };
     conn.execute(
-        "INSERT INTO stories (user_id, media_url, caption, bg_preset, is_highlight, expires_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, datetime('now', '+24 hours'))",
-        params![auth.user_id, murl, payload.caption.trim(), preset, highlight],
+        "INSERT INTO stories (user_id, media_url, media_type, caption, bg_preset, is_highlight, expires_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now', '+24 hours'))",
+        params![auth.user_id, murl, mtype, payload.caption.trim(), preset, highlight],
     )?;
     Ok(Json(json!({
         "success": true,
         "story_id": conn.last_insert_rowid()
     })))
+}
+
+pub async fn increment_story_view(
+    State(state): State<AppState>,
+    OptionalAuthUser(auth): OptionalAuthUser,
+    Path(story_id): Path<i64>,
+) -> Result<impl IntoResponse, AppError> {
+    let conn = state.lock_db();
+    if let Some(a) = auth {
+        let _ = conn.execute(
+            "INSERT INTO story_views (story_id, viewer_user_id) VALUES (?1, ?2) ON CONFLICT(story_id, viewer_user_id) DO NOTHING",
+            params![story_id, a.user_id],
+        );
+    }
+    conn.execute(
+        "UPDATE stories SET views_count = views_count + 1 WHERE id = ?1",
+        params![story_id],
+    )?;
+    let views_count: i64 = conn
+        .query_row("SELECT views_count FROM stories WHERE id = ?1", params![story_id], |r| r.get(0))
+        .unwrap_or(0);
+    Ok(Json(json!({
+        "success": true,
+        "views_count": views_count
+    })))
+}
+
+pub async fn toggle_story_highlight(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(story_id): Path<i64>,
+) -> Result<impl IntoResponse, AppError> {
+    let conn = state.lock_db();
+    let (owner_id, current_hl): (i64, i64) = conn.query_row(
+        "SELECT user_id, is_highlight FROM stories WHERE id = ?1",
+        params![story_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    if owner_id != auth.user_id && auth.role_id != 1 {
+        return Err(AppError::Forbidden("Only the story owner can toggle highlight.".into()));
+    }
+    let next_hl = if current_hl == 0 { 1 } else { 0 };
+    conn.execute(
+        "UPDATE stories SET is_highlight = ?1 WHERE id = ?2",
+        params![next_hl, story_id],
+    )?;
+    Ok(Json(json!({
+        "success": true,
+        "is_highlight": next_hl != 0
+    })))
+}
+
+pub async fn delete_story(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(story_id): Path<i64>,
+) -> Result<impl IntoResponse, AppError> {
+    let conn = state.lock_db();
+    let owner_id: i64 = conn.query_row(
+        "SELECT user_id FROM stories WHERE id = ?1",
+        params![story_id],
+        |r| r.get(0),
+    )?;
+    if owner_id != auth.user_id && auth.role_id != 1 {
+        return Err(AppError::Forbidden("Not authorized to delete this story.".into()));
+    }
+    conn.execute("DELETE FROM stories WHERE id = ?1", params![story_id])?;
+    Ok(Json(json!({ "success": true })))
 }
 
 pub fn compute_stream_unlocked(
@@ -2901,8 +3884,9 @@ pub async fn get_streams(
     State(state): State<AppState>,
     OptionalAuthUser(auth): OptionalAuthUser,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     let viewer_id = auth.as_ref().map(|a| a.user_id);
+    let viewer_is_admin = auth.as_ref().map(|a| a.role_id == 1).unwrap_or(false);
 
     let mut stmt = conn.prepare(
         "SELECT s.id, s.user_id, u.name, u.username, u.avatar, u.identity_verified_at,
@@ -2918,7 +3902,7 @@ pub async fn get_streams(
             let owner_id: i64 = r.get(1)?;
             let price: f64 = r.get(9)?;
             let req_sub: bool = r.get::<_, i64>(10)? != 0;
-            let is_owner = viewer_id == Some(owner_id);
+            let is_owner_or_admin = viewer_id == Some(owner_id) || viewer_is_admin;
             let is_unlocked = compute_stream_unlocked(&conn, sid, owner_id, price, req_sub, viewer_id);
             Ok(StreamView {
                 id: sid,
@@ -2934,8 +3918,8 @@ pub async fn get_streams(
                 requires_subscription: req_sub,
                 is_public: r.get::<_, i64>(11)? != 0,
                 status: r.get(12)?,
-                rtmp_server: if is_owner { r.get(13)? } else { String::new() },
-                rtmp_key: if is_owner { r.get(14)? } else { String::new() },
+                rtmp_server: if is_owner_or_admin { r.get(13)? } else { String::new() },
+                rtmp_key: if is_owner_or_admin { r.get(14)? } else { String::new() },
                 hls_link: if is_unlocked { r.get(15)? } else { String::new() },
                 viewer_count: r.get(16)?,
                 is_unlocked,
@@ -2943,6 +3927,13 @@ pub async fn get_streams(
             })
         })?
         .filter_map(Result::ok)
+        .filter(|sv| {
+            if let Some(vid) = viewer_id {
+                !is_blocked_between(&conn, vid, sv.user_id)
+            } else {
+                true
+            }
+        })
         .collect();
 
     Ok(Json(json!({
@@ -2975,7 +3966,7 @@ pub async fn save_stream(
         .map(|c| if c.is_alphanumeric() { c } else { '-' })
         .collect::<String>();
     let rtmp_key = format!("sk_live_{}_{}", auth.username, &Uuid::new_v4().simple().to_string()[..8]);
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
 
     conn.execute(
         "INSERT INTO streams (user_id, name, slug, price, requires_subscription, is_public, status, rtmp_key)
@@ -2984,7 +3975,7 @@ pub async fn save_stream(
             auth.user_id,
             name,
             slug,
-            payload.price.unwrap_or(0.0),
+            round_money(payload.price.unwrap_or(0.0).max(0.0)),
             if payload.requires_subscription.unwrap_or(false) { 1 } else { 0 },
             if payload.is_public.unwrap_or(true) { 1 } else { 0 },
             rtmp_key
@@ -3002,11 +3993,29 @@ pub async fn stop_stream(
     auth: AuthUser,
     Path(stream_id): Path<i64>,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     conn.execute(
-        "UPDATE streams SET status = 'ended' WHERE id = ?1 AND user_id = ?2",
-        params![stream_id, auth.user_id],
+        "UPDATE streams SET status = 'ended' WHERE id = ?1 AND (user_id = ?2 OR ?3 = 1)",
+        params![stream_id, auth.user_id, auth.role_id],
     )?;
+    Ok(Json(json!({ "success": true })))
+}
+
+pub async fn delete_stream(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(stream_id): Path<i64>,
+) -> Result<impl IntoResponse, AppError> {
+    let conn = state.lock_db();
+    let owner_id: i64 = conn.query_row(
+        "SELECT user_id FROM streams WHERE id = ?1",
+        params![stream_id],
+        |r| r.get(0),
+    )?;
+    if owner_id != auth.user_id && auth.role_id != 1 {
+        return Err(AppError::Forbidden("Not authorized to delete this stream.".into()));
+    }
+    conn.execute("DELETE FROM streams WHERE id = ?1", params![stream_id])?;
     Ok(Json(json!({ "success": true })))
 }
 
@@ -3015,8 +4024,9 @@ pub async fn get_stream_detail(
     OptionalAuthUser(auth): OptionalAuthUser,
     Path(stream_id): Path<i64>,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     let viewer_id = auth.as_ref().map(|a| a.user_id);
+    let viewer_is_admin = auth.as_ref().map(|a| a.role_id == 1).unwrap_or(false);
 
     let stream = conn.query_row(
         "SELECT s.id, s.user_id, u.name, u.username, u.avatar, u.identity_verified_at,
@@ -3029,7 +4039,7 @@ pub async fn get_stream_detail(
             let owner_id: i64 = r.get(1)?;
             let price: f64 = r.get(9)?;
             let req_sub: bool = r.get::<_, i64>(10)? != 0;
-            let is_owner = viewer_id == Some(owner_id);
+            let is_owner_or_admin = viewer_id == Some(owner_id) || viewer_is_admin;
             let is_unlocked = compute_stream_unlocked(&conn, sid, owner_id, price, req_sub, viewer_id);
             Ok(StreamView {
                 id: sid,
@@ -3045,8 +4055,8 @@ pub async fn get_stream_detail(
                 requires_subscription: req_sub,
                 is_public: r.get::<_, i64>(11)? != 0,
                 status: r.get(12)?,
-                rtmp_server: if is_owner { r.get(13)? } else { String::new() },
-                rtmp_key: if is_owner { r.get(14)? } else { String::new() },
+                rtmp_server: if is_owner_or_admin { r.get(13)? } else { String::new() },
+                rtmp_key: if is_owner_or_admin { r.get(14)? } else { String::new() },
                 hls_link: if is_unlocked { r.get(15)? } else { String::new() },
                 viewer_count: r.get(16)?,
                 is_unlocked,
@@ -3055,26 +4065,37 @@ pub async fn get_stream_detail(
         },
     )?;
 
-    let mut m_stmt = conn.prepare(
-        "SELECT sm.id, sm.stream_id, sm.user_id, u.name, u.username, u.avatar, sm.message, sm.created_at
-         FROM stream_messages sm JOIN users u ON sm.user_id = u.id
-         WHERE sm.stream_id = ?1 ORDER BY sm.id ASC",
-    )?;
-    let messages: Vec<StreamMessageView> = m_stmt
-        .query_map(params![stream_id], |r| {
-            Ok(StreamMessageView {
-                id: r.get(0)?,
-                stream_id: r.get(1)?,
-                user_id: r.get(2)?,
-                user_name: r.get(3)?,
-                user_username: r.get(4)?,
-                user_avatar: r.get(5)?,
-                message: r.get(6)?,
-                created_at: r.get(7)?,
-            })
-        })?
-        .filter_map(Result::ok)
-        .collect();
+    if let Some(vid) = viewer_id {
+        if is_blocked_between(&conn, vid, stream.user_id) {
+            return Err(AppError::Forbidden("Stream unavailable due to block settings.".into()));
+        }
+    }
+
+    let messages: Vec<StreamMessageView> = if !stream.is_unlocked {
+        Vec::new()
+    } else {
+        let mut m_stmt = conn.prepare(
+            "SELECT sm.id, sm.stream_id, sm.user_id, u.name, u.username, u.avatar, sm.message, sm.created_at
+             FROM stream_messages sm JOIN users u ON sm.user_id = u.id
+             WHERE sm.stream_id = ?1 ORDER BY sm.id ASC",
+        )?;
+        let rows = m_stmt
+            .query_map(params![stream_id], |r| {
+                Ok(StreamMessageView {
+                    id: r.get(0)?,
+                    stream_id: r.get(1)?,
+                    user_id: r.get(2)?,
+                    user_name: r.get(3)?,
+                    user_username: r.get(4)?,
+                    user_avatar: r.get(5)?,
+                    message: r.get(6)?,
+                    created_at: r.get(7)?,
+                })
+            })?
+            .filter_map(Result::ok)
+            .collect();
+        rows
+    };
 
     Ok(Json(json!({
         "success": true,
@@ -3098,7 +4119,19 @@ pub async fn add_stream_comment(
     if msg.is_empty() {
         return Err(AppError::Unprocessable("Message cannot be empty.".into()));
     }
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
+    let (owner_id, price, req_sub): (i64, f64, bool) = conn.query_row(
+        "SELECT user_id, price, requires_subscription FROM streams WHERE id = ?1",
+        params![payload.stream_id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get::<_, i64>(2)? != 0)),
+    )?;
+    if is_blocked_between(&conn, auth.user_id, owner_id) {
+        return Err(AppError::Forbidden("Cannot chat in this stream.".into()));
+    }
+    if !compute_stream_unlocked(&conn, payload.stream_id, owner_id, price, req_sub, Some(auth.user_id)) {
+        return Err(AppError::Forbidden("Unlock this live stream to participate in chat.".into()));
+    }
+
     conn.execute(
         "INSERT INTO stream_messages (stream_id, user_id, message) VALUES (?1, ?2, ?3)",
         params![payload.stream_id, auth.user_id, msg],
@@ -3130,7 +4163,7 @@ pub async fn get_invoice_detail(
     auth: AuthUser,
     Path(invoice_or_tx_id): Path<i64>,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     let tx = conn.query_row(
         "SELECT t.id, t.sender_user_id, t.recipient_user_id, u1.name, u1.email, u2.name,
                 t.tx_type, t.status, t.amount, t.currency, t.payment_provider, t.post_id, t.invoice_id, t.created_at
@@ -3171,7 +4204,7 @@ pub async fn get_public_page(
     State(state): State<AppState>,
     Path(slug): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     let page = conn.query_row(
         "SELECT id, slug, title, short_title, content, updated_at FROM public_pages WHERE slug = ?1",
         params![slug],
@@ -3207,7 +4240,7 @@ pub async fn send_contact_message(
     if payload.email.trim().is_empty() || payload.message.trim().is_empty() {
         return Err(AppError::Unprocessable("Email and message are required.".into()));
     }
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     conn.execute(
         "INSERT INTO contact_messages (email, subject, message) VALUES (?1, ?2, ?3)",
         params![
@@ -3235,7 +4268,7 @@ pub async fn submit_report(
     auth: AuthUser,
     Json(payload): Json<ReportPayload>,
 ) -> Result<impl IntoResponse, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     conn.execute(
         "INSERT INTO user_reports (from_user_id, reported_user_id, post_id, report_type, details)
          VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -3281,7 +4314,7 @@ pub async fn get_admin_dashboard(
     if auth.role_id != 1 {
         return Err(AppError::Forbidden("Admin privileges required.".into()));
     }
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
 
     let total_users: i64 = conn.query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))?;
     let total_posts: i64 = conn.query_row("SELECT COUNT(*) FROM posts", [], |r| r.get(0))?;
@@ -3380,7 +4413,7 @@ pub async fn get_admin_dashboard(
             "total_users": total_users,
             "total_posts": total_posts,
             "total_subscriptions": total_subscriptions,
-            "total_revenue": total_revenue,
+            "total_revenue": round_money(total_revenue),
         },
         "users": users,
         "withdrawals": withdrawals,
@@ -3403,8 +4436,9 @@ pub async fn handle_admin_withdrawal(
     if auth.role_id != 1 {
         return Err(AppError::Forbidden("Admin privileges required.".into()));
     }
-    let conn = state.db.lock().unwrap();
-    let (uid, amount, current_status): (i64, f64, String) = conn.query_row(
+    let mut conn = state.lock_db();
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let (uid, amount, current_status): (i64, f64, String) = tx.query_row(
         "SELECT user_id, amount, status FROM withdrawals WHERE id = ?1",
         params![withdrawal_id],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
@@ -3415,21 +4449,22 @@ pub async fn handle_admin_withdrawal(
     }
 
     if payload.action == "approve" {
-        conn.execute(
+        tx.execute(
             "UPDATE withdrawals SET status = 'approved' WHERE id = ?1",
             params![withdrawal_id],
         )?;
     } else {
-        conn.execute(
+        tx.execute(
             "UPDATE withdrawals SET status = 'rejected' WHERE id = ?1",
             params![withdrawal_id],
         )?;
         // Refund wallet
-        conn.execute(
-            "UPDATE wallets SET total = total + ?1 WHERE user_id = ?2",
-            params![amount, uid],
+        tx.execute(
+            "UPDATE wallets SET total = ROUND(total + ?1, 2) WHERE user_id = ?2",
+            params![round_money(amount), uid],
         )?;
     }
+    tx.commit()?;
 
     Ok(Json(json!({
         "success": true,
@@ -3451,7 +4486,7 @@ pub async fn handle_admin_report(
     if auth.role_id != 1 {
         return Err(AppError::Forbidden("Admin privileges required.".into()));
     }
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     let new_status = if payload.action == "dismiss" {
         "dismissed"
     } else {
@@ -3483,7 +4518,7 @@ pub async fn handle_admin_verification(
     if auth.role_id != 1 {
         return Err(AppError::Forbidden("Admin privileges required.".into()));
     }
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db();
     let uid: i64 = conn.query_row(
         "SELECT user_id FROM user_verifies WHERE id = ?1",
         params![verify_id],

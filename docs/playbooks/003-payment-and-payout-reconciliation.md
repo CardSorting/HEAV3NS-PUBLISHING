@@ -80,3 +80,4 @@ WHERE status = 'approved'
 GROUP BY sender_user_id, type, post_id, user_message_id, stream_id
 HAVING COUNT(*) > 1;
 ```
+

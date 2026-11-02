@@ -36,3 +36,4 @@ Specifically:
 
 ### Negative / Trade-offs
 - **Slightly Higher Query Cost per Feed Page**: Computing `is_unlocked` checks subscription and transaction tables per post, though with SQLite running in-process in WAL mode, these point lookups take microseconds.
+

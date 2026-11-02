@@ -1,6 +1,6 @@
 # JustFans (HEAV3NS-PUBLISHING) — Documentation & Knowledge Base
 
-Welcome to the engineering documentation and operational knowledge base for **JustFans (HEAV3NS-PUBLISHING)**, a full-stack creator monetization platform powered by a **Rust (Axum + SQLite)** backend and a **Next.js 14 (App Router + TypeScript)** frontend.
+Welcome to the engineering documentation and operational knowledge base for **JustFans (HEAV3NS-PUBLISHING)**, a full-stack creator monetization platform powered by a **Rust (Axum + SQLite)** backend and a **Next.js 16 (App Router + Turbopack + TypeScript)** frontend.
 
 ---
 
@@ -9,11 +9,11 @@ Welcome to the engineering documentation and operational knowledge base for **Ju
 ### 1. Core Architecture & Knowledge Base
 - **[Knowledge Base & Domain Reference](./knowledge-base/overview.md)** — Deep dive into domain concepts (Subscriptions, PPV Unlocks, Wallets, Streams, Reels, Stories, Moderation), user personas, and invariants.
 - **[System Architecture & Data Flow](./architecture/system-architecture.md)** — End-to-end architecture diagrams, request lifecycle, Next.js rewrite proxy, authentication extractors, and paywall enforcement model.
-- **[Database Schema & Entity Reference](./architecture/database-schema.md)** — Complete 21-table SQLite relational schema, foreign key cascade rules, indexing, and seeded demo state.
-- **[REST API Reference](./api/api-reference.md)** — Complete endpoint catalog across all 45+ routes, request/response JSON contracts, authentication requirements, and HTTP status codes.
+- **[Database Schema & Entity Reference](./architecture/database-schema.md)** — Complete 23-table SQLite relational schema, foreign key cascade rules, indexing, and seeded demo state.
+- **[REST API Reference](./api/api-reference.md)** — Complete endpoint catalog across all 60+ routes, request/response JSON contracts, authentication requirements, and HTTP status codes.
 
 ### 2. Architecture Decision Records (ADRs)
-- **[ADR-001: Migration from Laravel/jQuery Monolith to Rust (Axum) & Next.js 14](./adr/001-rust-axum-and-nextjs-migration.md)**
+- **[ADR-001: Migration from Laravel/jQuery Monolith to Rust (Axum) & Next.js](./adr/001-rust-axum-and-nextjs-migration.md)**
 - **[ADR-002: Embedded SQLite (`rusqlite`) with WAL Mode & Mutex State Serialization](./adr/002-sqlite-wal-and-state-management.md)**
 - **[ADR-003: Dual-Channel Stateless JWT Authentication (`Bearer` + `HttpOnly` Cookie)](./adr/003-dual-channel-jwt-authentication.md)**
 - **[ADR-004: Server-Side Paywall Enforcement & Public Profile Field Masking](./adr/004-server-side-paywall-and-privacy-masking.md)**
@@ -39,7 +39,8 @@ Welcome to the engineering documentation and operational knowledge base for **Ju
 | Task | Command |
 | --- | --- |
 | **Start Full Stack (Backend `:8080` + Frontend `:3000`)** | `./start-dev.sh` |
-| **Run Rust Integration Tests (7 Suites)** | `cd backend && cargo test` |
+| **Run Rust Integration Tests (8 Suites)** | `cd backend && cargo test` |
 | **Run Rust Clippy Linter (Strict)** | `cd backend && cargo clippy --all-targets -- -D warnings` |
-| **Build Next.js Production Bundle (21 Routes)** | `cd frontend && npm run build` |
+| **Build Next.js Production Bundle (22 Routes)** | `cd frontend && npm run build` |
 | **Inspect SQLite Database** | `sqlite3 backend/justfans.sqlite` |
+

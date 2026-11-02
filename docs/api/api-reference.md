@@ -127,3 +127,4 @@ All API endpoints are prefixed with `/api` on the Rust backend (`http://127.0.0.
 | `POST` | `/api/admin/withdrawals/:id` | Admin | Approves or rejects a payout withdrawal (`action: "approve" | "reject"`). Rejecting refunds the creator's wallet. |
 | `POST` | `/api/admin/verifications/:id` | Admin | Approves or rejects a creator ID verification (`action: "approve" | "reject"`). Approving sets `users.identity_verified_at`. |
 | `POST` | `/api/admin/reports/:id` | Admin | Resolves or dismisses a moderation report (`action: "resolve" | "dismiss"`). |
+

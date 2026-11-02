@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
@@ -12,9 +12,20 @@ export default function RegisterPage() {
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [referralCode, setReferralCode] = useState('');
   const [agreed, setAgreed] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const refParam = params.get('ref');
+      if (refParam) {
+        setReferralCode(refParam.trim());
+      }
+    }
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -25,7 +36,7 @@ export default function RegisterPage() {
     setError(null);
     setLoading(true);
     try {
-      await registerAccount(name, username, email, password);
+      await registerAccount(name, username, email, password, referralCode.trim() || undefined);
       router.push('/feed');
     } catch (err: any) {
       setError(err.message || 'Registration failed');
@@ -96,6 +107,18 @@ export default function RegisterPage() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
+                  className="form-control rounded-pill px-3"
+                />
+              </div>
+              <div>
+                <label className="form-label small fw-bold">
+                  Referral Code <span className="text-muted fw-normal">(optional — +$5.00 bonus)</span>
+                </label>
+                <input
+                  type="text"
+                  value={referralCode}
+                  onChange={(e) => setReferralCode(e.target.value)}
+                  placeholder="e.g. ARIA2026"
                   className="form-control rounded-pill px-3"
                 />
               </div>

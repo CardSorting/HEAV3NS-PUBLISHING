@@ -7,13 +7,14 @@ import { useAuth } from '@/context/AuthContext';
 import { AppShell } from '@/components/AppShell';
 
 export default function ReelsPage() {
-  const { user } = useAuth();
+  const { user, refreshUser } = useAuth();
   const [reels, setReels] = useState<ReelItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeCommentReelId, setActiveCommentReelId] = useState<number | null>(null);
   const [commentsMap, setCommentsMap] = useState<Record<number, ReelComment[]>>({});
   const [commentInput, setCommentInput] = useState('');
   const [busy, setBusy] = useState(false);
+  const [feedback, setFeedback] = useState<string | null>(null);
 
   const loadReels = () => {
     setLoading(true);
@@ -26,6 +27,39 @@ export default function ReelsPage() {
   useEffect(() => {
     loadReels();
   }, []);
+
+  const handleTrackView = async (reelId: number) => {
+    try {
+      const res = await apiFetch(`/api/reels/${reelId}/view`, { method: 'POST' });
+      setReels((prev) =>
+        prev.map((r) => (r.id === reelId ? { ...r, views_count: res.views_count } : r))
+      );
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleUnlockReel = async (reel: ReelItem) => {
+    setBusy(true);
+    setFeedback(null);
+    try {
+      await apiFetch('/api/payments/initiate', {
+        method: 'POST',
+        body: JSON.stringify({
+          payment_type: 'reel-unlock',
+          reel_id: reel.id,
+          recipient_user_id: reel.user_id,
+          provider: 'credit',
+        }),
+      });
+      await refreshUser();
+      loadReels();
+    } catch (err: any) {
+      setFeedback(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const handleToggleLike = async (reelId: number) => {
     if (!user) return;
@@ -99,10 +133,27 @@ export default function ReelsPage() {
         prev.map((r) => (r.id === reelId ? { ...r, comments_count: r.comments_count + 1 } : r))
       );
       setCommentInput('');
-    } catch {
-      // ignore
+    } catch (err: any) {
+      setFeedback(err.message);
     } finally {
       setBusy(false);
+    }
+  };
+
+  const handleDeleteReelComment = async (reelId: number, commentId: number) => {
+    try {
+      await apiFetch(`/api/reels/comments/${commentId}`, { method: 'DELETE' });
+      setCommentsMap((prev) => ({
+        ...prev,
+        [reelId]: (prev[reelId] || []).filter((c) => c.id !== commentId),
+      }));
+      setReels((prev) =>
+        prev.map((r) =>
+          r.id === reelId ? { ...r, comments_count: Math.max(0, r.comments_count - 1) } : r
+        )
+      );
+    } catch (err: any) {
+      setFeedback(err.message);
     }
   };
 
@@ -121,6 +172,8 @@ export default function ReelsPage() {
           </Link>
         </div>
 
+        {feedback && <div className="alert alert-danger py-2 small mb-3">{feedback}</div>}
+
         {loading ? (
           <div className="p-5 text-center text-muted">Loading Reels...</div>
         ) : (
@@ -129,19 +182,47 @@ export default function ReelsPage() {
               <div key={r.id} className="col-12 col-md-6 col-lg-4">
                 <div className="card border rounded-4 overflow-hidden shadow-sm h-100 d-flex flex-column">
                   <div className="position-relative bg-dark" style={{ height: 340 }}>
-                    <video
-                      src={r.video_url}
-                      poster={r.cover_url || '/img/home-scene-1.svg'}
-                      controls
-                      playsInline
-                      loop
-                      muted
-                      className="w-100 h-100"
-                      style={{ objectFit: 'cover' }}
-                    />
+                    {r.is_unlocked && r.video_url ? (
+                      <video
+                        src={r.video_url}
+                        poster={r.cover_url || '/img/home-scene-1.svg'}
+                        controls
+                        playsInline
+                        loop
+                        muted
+                        onPlay={() => handleTrackView(r.id)}
+                        className="w-100 h-100"
+                        style={{ objectFit: 'cover' }}
+                      />
+                    ) : (
+                      <div className="w-100 h-100 d-flex flex-column align-items-center justify-content-center text-white p-3 text-center">
+                        <img
+                          src="/img/post-locked.svg"
+                          alt="Locked Reel"
+                          style={{ height: 110 }}
+                          className="mb-2"
+                        />
+                        <div className="fw-bold small mb-2">
+                          Pay-Per-View Reel (${r.price.toFixed(2)})
+                        </div>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => handleUnlockReel(r)}
+                          className="btn btn-sm btn-warning rounded-pill px-3 fw-bold"
+                        >
+                          Unlock Reel for ${r.price.toFixed(2)}
+                        </button>
+                      </div>
+                    )}
                     <span className="badge bg-dark bg-opacity-75 position-absolute top-0 start-0 m-2">
                       👁️ {r.views_count} views
                     </span>
+                    {r.price > 0 && (
+                      <span className="badge bg-warning text-dark position-absolute bottom-0 start-0 m-2">
+                        PPV ${r.price.toFixed(2)}
+                      </span>
+                    )}
                     {user && (user.id === r.user_id || user.role_id === 1) && (
                       <button
                         type="button"
@@ -217,18 +298,34 @@ export default function ReelsPage() {
                             ) : (
                               (commentsMap[r.id] || []).map((c) => (
                                 <div key={c.id} className="small p-2 rounded-3 bg-body-tertiary">
-                                  <div className="d-flex justify-content-between">
+                                  <div className="d-flex justify-content-between align-items-center">
                                     <strong>@{c.user_username}</strong>
-                                    <span className="text-muted" style={{ fontSize: 11 }}>
-                                      {c.created_at}
-                                    </span>
+                                    <div className="d-flex align-items-center gap-1">
+                                      <span className="text-muted" style={{ fontSize: 11 }}>
+                                        {c.created_at}
+                                      </span>
+                                      {user &&
+                                        (user.id === c.user_id ||
+                                          user.id === r.user_id ||
+                                          user.role_id === 1) && (
+                                          <button
+                                            type="button"
+                                            onClick={() => handleDeleteReelComment(r.id, c.id)}
+                                            className="btn btn-link btn-sm p-0 text-danger text-decoration-none"
+                                            style={{ fontSize: 11 }}
+                                            title="Delete comment"
+                                          >
+                                            ✕
+                                          </button>
+                                        )}
+                                    </div>
                                   </div>
                                   <div>{c.message}</div>
                                 </div>
                               ))
                             )}
                           </div>
-                          {user && (
+                          {user && r.is_unlocked && (
                             <form
                               onSubmit={(e) => handleAddComment(e, r.id)}
                               className="d-flex gap-1"

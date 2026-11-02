@@ -3,7 +3,7 @@
 import React, { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { apiFetch, ConversationContact, DirectMessage, UserProfile } from '@/lib/api';
+import { apiFetch, Attachment, ConversationContact, DirectMessage, UserProfile } from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
 import { AppShell } from '@/components/AppShell';
 
@@ -18,7 +18,14 @@ function MessengerContent() {
   const [messages, setMessages] = useState<DirectMessage[]>([]);
   const [messageText, setMessageText] = useState('');
   const [messagePrice, setMessagePrice] = useState('0');
+  const [attachments, setAttachments] = useState<string[]>([]);
+  const [vaultItems, setVaultItems] = useState<Attachment[]>([]);
+  const [vaultPickerOpen, setVaultPickerOpen] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [tipDrawerOpen, setTipDrawerOpen] = useState(false);
+  const [tipAmount, setTipAmount] = useState('10');
   const [searchFilter, setSearchFilter] = useState('');
+  const [mobileShowThread, setMobileShowThread] = useState(Boolean(initialContactId));
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
 
@@ -41,13 +48,16 @@ function MessengerContent() {
       setActiveContact(res.contact);
       setMessages(res.messages || []);
       await refreshUser();
-    } catch {
-      // ignore
+    } catch (e: any) {
+      setFeedback(e.message);
     }
   };
 
   useEffect(() => {
     loadContacts();
+    apiFetch('/api/vault')
+      .then((res) => setVaultItems(res.items || []))
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -56,9 +66,32 @@ function MessengerContent() {
     }
   }, [selectedUserId]);
 
+  const handleUploadMedia = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    setUploading(true);
+    setFeedback(null);
+    try {
+      const formData = new FormData();
+      Array.from(files).forEach((f) => formData.append('file', f));
+      const res = await apiFetch('/api/attachment/upload', {
+        method: 'POST',
+        body: formData,
+      });
+      if (res.attachments) {
+        const urls = res.attachments.map((a: Attachment) => a.file_url);
+        setAttachments((prev) => [...prev, ...urls]);
+      }
+    } catch (err: any) {
+      setFeedback(err.message);
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedUserId || !messageText.trim()) return;
+    if (!selectedUserId || (!messageText.trim() && attachments.length === 0)) return;
     setBusy(true);
     setFeedback(null);
     try {
@@ -68,16 +101,65 @@ function MessengerContent() {
           receiver_id: selectedUserId,
           message: messageText,
           price: parseFloat(messagePrice) || 0,
+          attachments: attachments.length > 0 ? attachments : undefined,
         }),
       });
       setMessages((prev) => [...prev, res.message]);
       setMessageText('');
       setMessagePrice('0');
+      setAttachments([]);
+      setVaultPickerOpen(false);
       loadContacts();
     } catch (err: any) {
       setFeedback(err.message);
     } finally {
       setBusy(false);
+    }
+  };
+
+  const handleSendTip = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedUserId || !activeContact) return;
+    setBusy(true);
+    setFeedback(null);
+    try {
+      const amt = parseFloat(tipAmount) || 5;
+      await apiFetch('/api/payments/initiate', {
+        method: 'POST',
+        body: JSON.stringify({
+          payment_type: 'tip',
+          recipient_user_id: selectedUserId,
+          amount: amt,
+          provider: 'credit',
+        }),
+      });
+      const tipMsg = await apiFetch('/api/messenger/send', {
+        method: 'POST',
+        body: JSON.stringify({
+          receiver_id: selectedUserId,
+          message: `💵 Sent a $${amt.toFixed(2)} tip!`,
+          price: 0,
+        }),
+      });
+      setMessages((prev) => [...prev, tipMsg.message]);
+      setTipDrawerOpen(false);
+      await refreshUser();
+      loadContacts();
+    } catch (err: any) {
+      setFeedback(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleTogglePinMessage = async (msgId: number) => {
+    try {
+      const res = await apiFetch(`/api/messenger/pin/${msgId}`, { method: 'POST' });
+      setMessages((prev) =>
+        prev.map((m) => (m.id === msgId ? { ...m, is_pinned: res.is_pinned } : m))
+      );
+    } catch (err: any) {
+      setFeedback(err.message);
     }
   };
 
@@ -119,10 +201,16 @@ function MessengerContent() {
       c.username.toLowerCase().includes(searchFilter.toLowerCase())
   );
 
+  const pinnedMessages = messages.filter((m) => m.is_pinned);
+
   return (
     <div className="row g-0 min-vh-100">
       {/* Contacts Sidebar */}
-      <div className="col-12 col-md-4 border-end d-flex flex-column">
+      <div
+        className={`col-12 col-md-4 border-end flex-column ${
+          mobileShowThread ? 'd-none d-md-flex' : 'd-flex'
+        }`}
+      >
         <div className="p-3 border-bottom">
           <h5 className="fw-bold mb-2">Messages</h5>
           <input
@@ -141,7 +229,10 @@ function MessengerContent() {
               <button
                 key={c.user_id}
                 type="button"
-                onClick={() => setSelectedUserId(c.user_id)}
+                onClick={() => {
+                  setSelectedUserId(c.user_id);
+                  setMobileShowThread(true);
+                }}
                 className={`w-100 text-start border-0 border-bottom p-3 d-flex align-items-center gap-3 ${
                   isSelected ? 'bg-primary-subtle' : 'bg-transparent'
                 }`}
@@ -170,11 +261,22 @@ function MessengerContent() {
       </div>
 
       {/* Active Conversation Thread */}
-      <div className="col-12 col-md-8 d-flex flex-column">
+      <div
+        className={`col-12 col-md-8 flex-column ${
+          mobileShowThread ? 'd-flex' : 'd-none d-md-flex'
+        }`}
+      >
         {activeContact ? (
           <>
             <div className="p-3 border-bottom d-flex justify-content-between align-items-center">
               <div className="d-flex align-items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setMobileShowThread(false)}
+                  className="btn btn-sm btn-outline-secondary rounded-pill d-md-none me-1"
+                >
+                  ←
+                </button>
                 <img
                   src={activeContact.avatar || '/img/default-avatar.jpg'}
                   alt={activeContact.name}
@@ -191,13 +293,60 @@ function MessengerContent() {
                   <div className="small text-muted">@{activeContact.username}</div>
                 </div>
               </div>
-              <Link
-                href={`/${activeContact.username}`}
-                className="btn btn-sm btn-outline-secondary rounded-pill px-3"
-              >
-                View Profile
-              </Link>
+              <div className="d-flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setTipDrawerOpen(!tipDrawerOpen)}
+                  className="btn btn-sm btn-outline-success rounded-pill px-3 fw-semibold"
+                >
+                  💵 Tip
+                </button>
+                <Link
+                  href={`/${activeContact.username}`}
+                  className="btn btn-sm btn-outline-secondary rounded-pill px-3"
+                >
+                  Profile
+                </Link>
+              </div>
             </div>
+
+            {/* Pinned Messages Banner */}
+            {pinnedMessages.length > 0 && (
+              <div className="px-3 py-2 border-bottom bg-warning-subtle small d-flex justify-content-between align-items-center">
+                <div className="text-truncate">
+                  <strong>📌 Pinned:</strong> {pinnedMessages[pinnedMessages.length - 1].message}
+                </div>
+                <span className="badge bg-warning text-dark ms-2">{pinnedMessages.length}</span>
+              </div>
+            )}
+
+            {/* In-Chat Tip Drawer */}
+            {tipDrawerOpen && (
+              <form onSubmit={handleSendTip} className="p-3 border-bottom bg-body-tertiary">
+                <div className="d-flex justify-content-between align-items-center mb-2">
+                  <strong className="small">💵 Send Tip to {activeContact.name}</strong>
+                  <button
+                    type="button"
+                    onClick={() => setTipDrawerOpen(false)}
+                    className="btn-close btn-sm"
+                  />
+                </div>
+                <div className="input-group input-group-sm">
+                  <span className="input-group-text">$</span>
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={tipAmount}
+                    onChange={(e) => setTipAmount(e.target.value)}
+                    className="form-control"
+                  />
+                  <button type="submit" disabled={busy} className="btn btn-success fw-semibold">
+                    Send Tip
+                  </button>
+                </div>
+              </form>
+            )}
 
             <div className="p-3 flex-fill overflow-auto d-flex flex-column gap-3">
               {messages.length === 0 ? (
@@ -220,14 +369,40 @@ function MessengerContent() {
                         }`}
                         style={{ maxWidth: '78%' }}
                       >
-                        {m.price > 0 && (
-                          <div className="mb-1">
+                        <div className="d-flex flex-wrap gap-1 mb-1">
+                          {m.is_pinned && (
+                            <span className="badge bg-info text-dark">📌 Pinned</span>
+                          )}
+                          {m.price > 0 && (
                             <span className="badge bg-warning text-dark">
                               PPV ${m.price.toFixed(2)}
                             </span>
+                          )}
+                        </div>
+                        <div>{m.message}</div>
+                        {m.is_unlocked && m.attachments && m.attachments.length > 0 && (
+                          <div className="mt-2 d-flex flex-wrap gap-2">
+                            {m.attachments.map((att) =>
+                              att.file_type === 'video' ? (
+                                <video
+                                  key={att.id}
+                                  src={att.file_url}
+                                  controls
+                                  className="rounded-3 border"
+                                  style={{ maxWidth: 220, maxHeight: 220 }}
+                                />
+                              ) : (
+                                <img
+                                  key={att.id}
+                                  src={att.file_url}
+                                  alt={att.filename}
+                                  className="rounded-3 border"
+                                  style={{ maxWidth: 220, maxHeight: 220, objectFit: 'cover' }}
+                                />
+                              )
+                            )}
                           </div>
                         )}
-                        <div>{m.message}</div>
                         {!m.is_unlocked && (
                           <button
                             type="button"
@@ -243,6 +418,15 @@ function MessengerContent() {
                         <span className="small text-muted" style={{ fontSize: 11 }}>
                           {m.created_at}
                         </span>
+                        <button
+                          type="button"
+                          onClick={() => handleTogglePinMessage(m.id)}
+                          className="btn btn-link btn-sm p-0 text-secondary text-decoration-none"
+                          style={{ fontSize: 11 }}
+                          title="Pin or unpin message"
+                        >
+                          {m.is_pinned ? 'Unpin' : 'Pin'}
+                        </button>
                         {isMine && (
                           <button
                             type="button"
@@ -265,9 +449,97 @@ function MessengerContent() {
               <div className="alert alert-danger mx-3 py-2 small mb-2">{feedback}</div>
             )}
 
+            {/* Vault Picker Drawer */}
+            {vaultPickerOpen && (
+              <div className="p-2 border-top bg-body-tertiary">
+                <div className="d-flex justify-content-between align-items-center mb-1 px-1">
+                  <strong className="small">Attach from Media Vault</strong>
+                  <button
+                    type="button"
+                    onClick={() => setVaultPickerOpen(false)}
+                    className="btn-close btn-sm"
+                  />
+                </div>
+                <div className="d-flex gap-2 overflow-auto py-1">
+                  {[
+                    '/img/home-scene-1.svg',
+                    '/img/home-scene-2.svg',
+                    '/img/home-scene-3.svg',
+                    ...vaultItems.map((v) => v.file_url),
+                  ]
+                    .filter((v, idx, arr) => arr.indexOf(v) === idx)
+                    .map((url) => (
+                      <button
+                        key={url}
+                        type="button"
+                        onClick={() =>
+                          setAttachments((prev) => (prev.includes(url) ? prev : [...prev, url]))
+                        }
+                        className="btn p-1 border rounded-3 bg-body flex-shrink-0"
+                      >
+                        <img
+                          src={url}
+                          alt="Vault"
+                          style={{ width: 54, height: 54, objectFit: 'cover' }}
+                        />
+                      </button>
+                    ))}
+                </div>
+              </div>
+            )}
+
+            {/* Selected Attachments Preview */}
+            {attachments.length > 0 && (
+              <div className="px-3 py-2 border-top bg-body d-flex flex-wrap gap-2">
+                {attachments.map((url, idx) => (
+                  <div key={idx} className="position-relative border rounded-3 p-1">
+                    <img
+                      src={url}
+                      alt="Attached"
+                      style={{ width: 52, height: 52, objectFit: 'cover' }}
+                      className="rounded-2"
+                    />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setAttachments((prev) => prev.filter((_, i) => i !== idx))
+                      }
+                      className="btn btn-sm btn-danger rounded-circle position-absolute top-0 end-0 py-0 px-1"
+                      style={{ fontSize: 10 }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
             {/* Composer Footer */}
             <form onSubmit={handleSendMessage} className="p-3 border-top bg-body-tertiary">
               <div className="row g-2 align-items-center">
+                <div className="col-auto d-flex gap-1">
+                  <label
+                    className="btn btn-sm btn-outline-secondary rounded-pill mb-0"
+                    title="Upload media attachment"
+                  >
+                    {uploading ? '...' : '📎'}
+                    <input
+                      type="file"
+                      multiple
+                      accept="image/*,video/*"
+                      onChange={handleUploadMedia}
+                      className="d-none"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setVaultPickerOpen(!vaultPickerOpen)}
+                    className="btn btn-sm btn-outline-secondary rounded-pill"
+                    title="Pick from Media Vault"
+                  >
+                    🖼️
+                  </button>
+                </div>
                 <div className="col">
                   <input
                     type="text"
@@ -277,7 +549,7 @@ function MessengerContent() {
                     className="form-control rounded-pill px-3"
                   />
                 </div>
-                <div className="col-auto" style={{ width: 130 }}>
+                <div className="col-auto" style={{ width: 115 }}>
                   <div className="input-group input-group-sm">
                     <span className="input-group-text" title="Optional PPV Price">
                       $

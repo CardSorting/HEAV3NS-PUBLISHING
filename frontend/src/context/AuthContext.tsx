@@ -8,11 +8,18 @@ interface AuthContextValue {
   loading: boolean;
   unreadNotifications: number;
   unreadMessages: number;
+  activeStreamsCount: number;
   darkMode: boolean;
   toggleDarkMode: () => void;
   refreshUser: () => Promise<void>;
   loginWithCredentials: (email: string, password: string) => Promise<UserProfile>;
-  registerAccount: (name: string, username: string, email: string, password: string) => Promise<UserProfile>;
+  registerAccount: (
+    name: string,
+    username: string,
+    email: string,
+    password: string,
+    referralCode?: string
+  ) => Promise<UserProfile>;
   logoutUser: () => Promise<void>;
 }
 
@@ -21,6 +28,7 @@ const AuthContext = createContext<AuthContextValue>({
   loading: true,
   unreadNotifications: 0,
   unreadMessages: 0,
+  activeStreamsCount: 0,
   darkMode: false,
   toggleDarkMode: () => {},
   refreshUser: async () => {},
@@ -38,6 +46,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [unreadMessages, setUnreadMessages] = useState(0);
+  const [activeStreamsCount, setActiveStreamsCount] = useState(0);
   const [darkMode, setDarkMode] = useState(false);
 
   const refreshUser = async () => {
@@ -46,6 +55,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(data.user);
       setUnreadNotifications(data.unread_notifications || 0);
       setUnreadMessages(data.unread_messages || 0);
+      setActiveStreamsCount(data.active_streams_count || 0);
     } catch {
       setUser(null);
     } finally {
@@ -90,11 +100,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     name: string,
     username: string,
     email: string,
-    password: string
+    password: string,
+    referralCode?: string
   ) => {
     const data = await apiFetch('/api/auth/register', {
       method: 'POST',
-      body: JSON.stringify({ name, username, email, password }),
+      body: JSON.stringify({
+        name,
+        username,
+        email,
+        password,
+        referral_code: referralCode?.trim() || undefined,
+      }),
     });
     if (data.token) {
       setStoredToken(data.token);
@@ -121,6 +138,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         loading,
         unreadNotifications,
         unreadMessages,
+        activeStreamsCount,
         darkMode,
         toggleDarkMode,
         refreshUser,

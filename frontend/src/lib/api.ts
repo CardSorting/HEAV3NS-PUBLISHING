@@ -22,11 +22,13 @@ export interface UserProfile {
   enable_geoblocking: boolean;
   is_verified: boolean;
   fans_count: number;
+  followers_count?: number;
   following_count: number;
   posts_count: number;
   media_count: number;
   is_subscribed: boolean;
   is_following: boolean;
+  is_blocked?: boolean;
   wallet_balance: number;
   referral_code: string;
   created_at: string;

@@ -158,3 +158,4 @@ Immutable ledger of all deposits, subscriptions, tips, and PPV unlocks.
 - `contact_messages`: Public contact form submissions.
 - `user_reports`: Content/user moderation reports (`status`: `received`, `resolved`, `dismissed`).
 - `user_verifies`: Creator KYC identity verification requests (`status`: `pending`, `approved`, `rejected`, `files`: JSON string array).
+

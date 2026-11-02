@@ -32,3 +32,4 @@ We chose **embedded SQLite (`rusqlite 0.31` with `bundled` feature)** managed th
 
 ### Negative / Trade-offs
 - **Single-Node Write Serialization**: `Arc<Mutex<Connection>>` serializes database operations within a single backend process. If horizontal multi-node scaling is required in the future, the state layer will need to migrate to a connection pool (`r2d2_sqlite` or `sqlx::PgPool`) with explicit `BEGIN IMMEDIATE` database transactions.
+

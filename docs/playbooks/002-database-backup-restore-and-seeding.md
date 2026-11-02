@@ -93,3 +93,4 @@ SELECT id, sender_user_id, recipient_user_id, type, status, amount, payment_prov
 FROM transactions
 ORDER BY id DESC LIMIT 20;
 ```
+

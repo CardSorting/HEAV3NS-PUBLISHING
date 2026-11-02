@@ -25,6 +25,15 @@ export function PostCard({
   const [reportDetails, setReportDetails] = useState('');
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [editingCommentId, setEditingCommentId] = useState<number | null>(null);
+  const [editingCommentText, setEditingCommentText] = useState('');
+
+  const handleCopyPostLink = () => {
+    if (typeof window === 'undefined') return;
+    const url = `${window.location.origin}/posts/${post.id}/${post.user_username}`;
+    navigator.clipboard?.writeText(url);
+    setFeedback('Post link copied to clipboard!');
+  };
 
   const handleLike = async () => {
     if (!user) return;
@@ -95,6 +104,29 @@ export function PostCard({
         comments: [...p.comments, res.comment],
       }));
       setCommentText('');
+    } catch (err: any) {
+      setFeedback(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleSaveEditComment = async (commentId: number) => {
+    if (!editingCommentText.trim()) return;
+    setBusy(true);
+    try {
+      const res = await apiFetch(`/api/posts/comments/${commentId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ message: editingCommentText }),
+      });
+      setPost((p) => ({
+        ...p,
+        comments: p.comments.map((c) =>
+          c.id === commentId ? { ...c, message: res.message || editingCommentText } : c
+        ),
+      }));
+      setEditingCommentId(null);
+      setEditingCommentText('');
     } catch (err: any) {
       setFeedback(err.message);
     } finally {
@@ -293,6 +325,14 @@ export function PostCard({
 
           {/* Author / Post Actions */}
           <div className="d-flex align-items-center gap-1">
+            <button
+              type="button"
+              onClick={handleCopyPostLink}
+              className="btn btn-sm btn-outline-secondary rounded-pill"
+              title="Copy post link"
+            >
+              🔗
+            </button>
             {user && user.id === post.user_id && (
               <>
                 <button
@@ -332,6 +372,22 @@ export function PostCard({
             )}
           </div>
         </div>
+
+        {/* Scheduled / Expiry Badges */}
+        {(post.release_date || post.expire_date) && (
+          <div className="d-flex flex-wrap gap-2 mb-2">
+            {post.release_date && (
+              <span className="badge bg-info-subtle text-info-emphasis rounded-pill">
+                🗓️ Scheduled: {post.release_date}
+              </span>
+            )}
+            {post.expire_date && (
+              <span className="badge bg-secondary-subtle text-secondary-emphasis rounded-pill">
+                ⏳ Expires: {post.expire_date}
+              </span>
+            )}
+          </div>
+        )}
 
         {/* Post Text */}
         <div className="mb-3" style={{ whiteSpace: 'pre-wrap' }}>
@@ -591,24 +647,67 @@ export function PostCard({
                           {user && (user.id === c.user_id || user.role_id === 1) && (
                             <button
                               type="button"
-                              onClick={() => handleDeleteComment(c.id)}
-                              className="btn btn-sm btn-outline-danger py-0 px-2 rounded-pill"
+                              onClick={() => {
+                                setEditingCommentId(c.id);
+                                setEditingCommentText(c.message);
+                              }}
+                              className="btn btn-sm btn-outline-secondary py-0 px-2 rounded-pill"
                               style={{ fontSize: 11 }}
-                              title="Delete comment"
+                              title="Edit comment"
                             >
-                              🗑️
+                              ✏️
                             </button>
                           )}
+                          {user &&
+                            (user.id === c.user_id ||
+                              user.id === post.user_id ||
+                              user.role_id === 1) && (
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteComment(c.id)}
+                                className="btn btn-sm btn-outline-danger py-0 px-2 rounded-pill"
+                                style={{ fontSize: 11 }}
+                                title="Delete comment"
+                              >
+                                🗑️
+                              </button>
+                            )}
                         </div>
                       </div>
-                      <div className="mt-1">{c.message}</div>
+                      {editingCommentId === c.id ? (
+                        <div className="d-flex gap-1 mt-2">
+                          <input
+                            type="text"
+                            value={editingCommentText}
+                            onChange={(e) => setEditingCommentText(e.target.value)}
+                            className="form-control form-control-sm"
+                          />
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => handleSaveEditComment(c.id)}
+                            className="btn btn-sm btn-primary"
+                          >
+                            Save
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditingCommentId(null)}
+                            className="btn btn-sm btn-outline-secondary"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="mt-1">{c.message}</div>
+                      )}
                     </div>
                   </div>
                 ))
               )}
             </div>
 
-            {user && (
+            {user && post.is_unlocked && (
               <form onSubmit={handleAddComment} className="d-flex gap-2">
                 <input
                   type="text"

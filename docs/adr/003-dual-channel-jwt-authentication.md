@@ -36,3 +36,4 @@ We implemented two custom Axum request extractors in [`backend/src/auth.rs`](fil
 
 ### Negative / Trade-offs
 - **Token Revocation**: Because JWTs are stateless until `exp`, immediate revocation of an active token prior to expiry requires either rotating `JWT_SECRET` or checking user status in the database on sensitive operations (which we do for admin checks via `is_admin()`).
+

@@ -105,12 +105,26 @@ export default function StreamWatchPage() {
             <div className="col-12 col-lg-8">
               {stream.is_unlocked ? (
                 <div className="rounded-4 overflow-hidden bg-dark text-white position-relative border shadow">
-                  <img
-                    src={stream.poster || '/img/live-stream-cover.svg'}
-                    alt={stream.name}
-                    className="w-100"
-                    style={{ height: 420, objectFit: 'cover' }}
-                  />
+                  {stream.hls_link ? (
+                    <video
+                      src={stream.hls_link}
+                      poster={stream.poster || '/img/live-stream-cover.svg'}
+                      controls
+                      autoPlay
+                      muted
+                      playsInline
+                      loop
+                      className="w-100 bg-black"
+                      style={{ height: 420, objectFit: 'cover' }}
+                    />
+                  ) : (
+                    <img
+                      src={stream.poster || '/img/live-stream-cover.svg'}
+                      alt={stream.name}
+                      className="w-100"
+                      style={{ height: 420, objectFit: 'cover' }}
+                    />
+                  )}
                   <div className="position-absolute top-0 start-0 m-3 d-flex gap-2">
                     <span
                       className={`badge px-3 py-2 ${

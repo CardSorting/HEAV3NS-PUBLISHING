@@ -9,7 +9,7 @@ import { CreatorSuggestionCard, PostCard } from '@/components/PostCard';
 
 function SearchContent() {
   const searchParams = useSearchParams();
-  const initialQuery = searchParams?.get('query') || '';
+  const initialQuery = searchParams?.get('query') || searchParams?.get('q') || '';
   const initialFilter = searchParams?.get('filter') || 'top';
 
   const [query, setQuery] = useState(initialQuery);
@@ -36,6 +36,8 @@ function SearchContent() {
   };
 
   useEffect(() => {
+    setQuery(initialQuery);
+    setFilter(initialFilter);
     runSearch(initialQuery, initialFilter);
   }, [initialQuery, initialFilter]);
 

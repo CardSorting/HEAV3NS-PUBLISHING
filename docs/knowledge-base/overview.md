@@ -126,3 +126,4 @@ When `backend/src/db.rs` initializes an empty database, `seed_db()` populates 4 
   - Invoice `#1001`: `$14.99` subscription (`stripe`)
   - Invoice `#1002`: `$25.00` tip (`credit`)
   - Invoice `#1003`: `$100.00` wallet deposit (`stripe`)
+

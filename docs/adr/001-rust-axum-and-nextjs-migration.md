@@ -30,3 +30,4 @@ We decided to re-architect the application into a strict two-tier decoupled stac
 ### Negative / Trade-offs
 - **Steeper Compile Times**: Rust compilation (`cargo build --release`) takes longer than interpreting PHP scripts, though incremental `cargo check` remains fast.
 - **Explicit Serialization Boilerplate**: Every database query in [`backend/src/handlers.rs`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/handlers.rs) maps explicitly to typed Rust structs rather than relying on dynamic ORM hydration.
+

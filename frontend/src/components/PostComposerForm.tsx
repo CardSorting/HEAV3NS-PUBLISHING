@@ -10,6 +10,8 @@ export function PostComposerForm({ editPostId }: { editPostId?: number }) {
   const [text, setText] = useState('');
   const [price, setPrice] = useState('0');
   const [isPinned, setIsPinned] = useState(false);
+  const [releaseDate, setReleaseDate] = useState('');
+  const [expireDate, setExpireDate] = useState('');
   const [attachments, setAttachments] = useState<string[]>([]);
   const [vaultItems, setVaultItems] = useState<Attachment[]>([]);
   const [showVault, setShowVault] = useState(false);
@@ -28,8 +30,14 @@ export function PostComposerForm({ editPostId }: { editPostId?: number }) {
             setText(res.post.text || '');
             setPrice(String(res.post.price || 0));
             setIsPinned(Boolean(res.post.is_pinned));
+            if (res.post.release_date) setReleaseDate(res.post.release_date);
+            if (res.post.expire_date) setExpireDate(res.post.expire_date);
             if (res.post.attachments) {
               setAttachments(res.post.attachments.map((a: Attachment) => a.file_url));
+            }
+            if (res.post.poll && res.post.poll.answers?.length > 0) {
+              setShowPoll(true);
+              setPollAnswers(res.post.poll.answers.map((a: any) => a.answer));
             }
           }
         })
@@ -89,6 +97,8 @@ export function PostComposerForm({ editPostId }: { editPostId?: number }) {
           text,
           price: parseFloat(price) || 0,
           is_pinned: isPinned,
+          release_date: releaseDate ? releaseDate.replace('T', ' ') : undefined,
+          expire_date: expireDate ? expireDate.replace('T', ' ') : undefined,
           attachments,
           poll_answers: showPoll ? pollAnswers.filter((a) => a.trim().length > 0) : undefined,
         }),
@@ -277,6 +287,33 @@ export function PostComposerForm({ editPostId }: { editPostId?: number }) {
                 <label htmlFor="pollSwitch" className="form-check-label fw-semibold">
                   📊 Include an interactive Poll
                 </label>
+              </div>
+            </div>
+          </div>
+
+          <div className="row g-3">
+            <div className="col-12 col-md-6">
+              <label className="form-label fw-bold small">🗓️ Scheduled Release Date (Optional)</label>
+              <input
+                type="datetime-local"
+                value={releaseDate ? releaseDate.replace(' ', 'T').slice(0, 16) : ''}
+                onChange={(e) => setReleaseDate(e.target.value)}
+                className="form-control"
+              />
+              <div className="form-text small">
+                If set in the future, only you can view this post until the release time.
+              </div>
+            </div>
+            <div className="col-12 col-md-6">
+              <label className="form-label fw-bold small">⏳ Post Expiration Date (Optional)</label>
+              <input
+                type="datetime-local"
+                value={expireDate ? expireDate.replace(' ', 'T').slice(0, 16) : ''}
+                onChange={(e) => setExpireDate(e.target.value)}
+                className="form-control"
+              />
+              <div className="form-text small">
+                Automatically hides the post from non-owners after this date.
               </div>
             </div>
           </div>

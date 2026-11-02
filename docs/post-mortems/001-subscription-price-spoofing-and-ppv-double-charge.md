@@ -62,3 +62,4 @@ Added [`test_financial_security_and_withdrawals`](file:///Users/bozoegg/Desktop/
 - Submitting a spoofed `$0.01` or `$0.00` `amount` on a subscription still charges the creator's true database price (`$9.99`).
 - Unlocking an already-unlocked PPV post returns `400 Bad Request` and leaves wallet balances untouched.
 - Rejecting a `$50.00` withdrawal restores the exact `$50.00` to the creator's wallet.
+

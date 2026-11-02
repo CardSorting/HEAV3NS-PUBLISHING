@@ -99,3 +99,4 @@ flowchart TD
   - `PRAGMA foreign_keys = ON;` — Ensures cascading deletes across posts, comments, reactions, polls, bookmarks, list members, and subscriptions.
   - `PRAGMA journal_mode = WAL;` — Enables Write-Ahead Logging for durability and fast disk commits.
 - Handler functions acquire the mutex lock for the duration of their synchronous SQLite queries and release it before returning the Axum JSON response. In `upload_attachment`, file bytes are streamed from the multipart body and written to disk *before* acquiring the SQLite mutex lock to minimize lock contention.
+

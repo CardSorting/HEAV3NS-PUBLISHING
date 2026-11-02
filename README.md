@@ -1,6 +1,6 @@
-# JustFans — Rust (Axum) & Next.js 14 Creator Platform
+# JustFans — Rust (Axum) & Next.js 16 Creator Platform
 
-JustFans is a full-stack premium creator monetization platform converted from Laravel/jQuery to a **Rust (Axum + SQLite)** backend (`backend/`) and a **Next.js 14 (App Router + TypeScript)** frontend (`frontend/`).
+JustFans is a full-stack premium creator monetization platform converted from Laravel/jQuery to a **Rust (Axum + SQLite)** backend (`backend/`) and a **Next.js 16 (App Router + Turbopack + TypeScript)** frontend (`frontend/`).
 
 ---
 
@@ -9,23 +9,28 @@ JustFans is a full-stack premium creator monetization platform converted from La
 | Layer | Technology Stack | Directory | Default Port |
 | --- | --- | --- | --- |
 | **Backend API** | Rust 2021, Axum 0.7, rusqlite (bundled SQLite), Argon2, JWT (`jsonwebtoken`), Tower HTTP | `backend/` | `http://127.0.0.1:8080` |
-| **Frontend Web** | Next.js 14 (App Router), React 18, TypeScript, Bootstrap 5 (Light & Dark themes) | `frontend/` | `http://127.0.0.1:3000` |
+| **Frontend Web** | Next.js 16.4.3 (App Router + Turbopack), React 19.3.1, TypeScript, Bootstrap 5 (Light & Dark themes) | `frontend/` | `http://127.0.0.1:3000` |
 
 ### Key Features
-- **Authentication & Security**: Argon2id password hashing, Bearer/Cookie JWT authentication, role-based admin access (`role_id == 1`), 2FA/privacy/geoblocking settings, and strict public profile field masking (`email`, `wallet_balance`, `birthdate`, `enable_2fa`, and `enable_geoblocking` are hidden from non-owners).
-- **Creator Feed & Paywall Protection**:
-  - Subscription-only and Pay-Per-View (PPV) locked posts mask post text, poll options, and media attachment URLs until unlocked via subscription or wallet payment.
-  - Feed filtering by `all`, `subscribed`, `media`, `photos`, and `videos`.
-  - Interactive polls, post/comment reactions, comment creation/deletion, bookmarks, and post/user reporting.
-- **Short-Form Video Reels & 24h Stories**:
-  - Vertical video Reels with `<video>` playback, likes, slide-over comments drawer, bookmarking, and creator deletion.
-  - Ephemeral 24h Creator Stories tray and lightbox viewer.
-- **Live Streams**: Creator streaming directory, HLS stream player, real-time stream chat, and PPV stream ticket unlocks.
-- **Direct Messenger**: 1-on-1 creator messaging, paid PPV message unlocks, tips, user blocking/unblocking, and message deletion.
-- **Wallet, Subscriptions & Payouts**: Instant wallet deposits (Stripe/PayPal/Crypto simulation), 1/3/6/12-month creator subscriptions, tips, printable tax invoices, and creator withdrawal requests.
-- **Custom Lists & Moderation**:
-  - Custom user lists (`Following`, `Blocked`, plus custom lists) with member management.
-  - Creator Identity Verification document upload and Admin Moderation Dashboard (approving/rejecting withdrawals and ID verifications, resolving/dismissing reports).
+- **Authentication, Billing & Referrals**: Argon2id password hashing, Bearer/Cookie JWT authentication, role-based admin access (`role_id == 1`), 2FA/privacy/geoblocking settings, tax/billing address management (`first_name`, `last_name`, `billing_address`, `city`, `state`, `postcode`, `country`), referral bonus program (`referral_code` with $5.00 bonus for both referrer and referee), and strict public profile field masking (`email`, `wallet_balance`, `birthdate`, `enable_2fa`, `enable_geoblocking`, and billing address fields are hidden from non-owners).
+- **Deep Hardening & Financial Integrity**:
+  - Panic-free database lock acquisition (`db_conn` helper recovering gracefully from poisoned mutexes).
+  - Atomic SQLite `IMMEDIATE` transactions across all wallet debits/credits (`subscribe`, `post-unlock`, `message-unlock`, `stream-access`, `reel-unlock`, `tip`, `deposit`, `withdraw`) with cent-precision (`round_cents`) arithmetic to eliminate IEEE-754 floating-point drift.
+  - Strict block enforcement across creator feeds, single posts, comments, profiles, DMs, and payments.
+- **Creator Feed, Scheduling & Paywall Protection**:
+  - Subscription-only and Pay-Per-View (PPV) locked posts mask post text, poll options, comments, and media attachment URLs until unlocked via subscription or wallet payment.
+  - Scheduled posts (`release_date`) and expiring posts (`expire_date`) enforced server-side for non-owners while remaining editable by the creator.
+  - Interactive polls, post/comment reactions, inline comment editing and post-author moderation, bookmarks, and post/user reporting.
+- **Short-Form Video Reels & 24h Stories / Highlights**:
+  - Vertical video Reels with `<video>` playback, PPV reel locks & wallet unlocks, view counting, likes, slide-over comments drawer with comment deletion, bookmarking, and creator deletion.
+  - Ephemeral 24h Creator Stories tray, permanent Profile Story Highlights (`is_highlight`), view tracking, and lightbox viewer on both Feed and Creator Profiles.
+- **Live Streams**: Creator streaming directory, HLS stream player, real-time stream chat (gated behind stream unlock), PPV stream ticket unlocks, and stream deletion.
+- **Direct Messenger**: 1-on-1 creator messaging, media uploads & Vault attachments, paid PPV message unlocks (with buyer-protection against deletion of purchased PPV messages), message pinning, in-chat tipping, and user blocking/unblocking.
+- **Media Vault & Custom Lists**:
+  - Creator Media Vault with filter tabs (`All Active`, `Photos`, `Videos`, `Archived`), archive/restore toggle, and usage tracking (`Post #X`, `DM #Y`).
+  - Custom user lists (`Following`, `Blocked`, plus custom lists) with list renaming, clearing, and member management.
+- **World-Class Navigation Ergonomics**:
+  - Sticky desktop navigation rail, mobile top bar & bottom navigation bar, live stream count badge, and global `⌘K` / `Ctrl+K` Quick Command & Navigation Palette.
 
 ---
 

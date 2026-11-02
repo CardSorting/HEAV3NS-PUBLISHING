@@ -1,5 +1,5 @@
 use rusqlite::{params, Connection};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::models::{Attachment, PollAnswerView, PollView, PostCommentView, PostView, UserPublicProfile};
 
@@ -10,6 +10,32 @@ pub struct AppState {
     pub public_dir: String,
 }
 
+impl AppState {
+    pub fn lock_db(&self) -> MutexGuard<'_, Connection> {
+        self.db.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+pub fn round_money(val: f64) -> f64 {
+    (val * 100.0).round() / 100.0
+}
+
+pub fn is_blocked_between(conn: &Connection, user_a: i64, user_b: i64) -> bool {
+    if user_a == user_b {
+        return false;
+    }
+    conn.query_row(
+        "SELECT COUNT(*) FROM user_list_members ulm
+         JOIN user_lists ul ON ulm.list_id = ul.id
+         WHERE ul.list_type = 'blocked'
+           AND ((ul.user_id = ?1 AND ulm.user_id = ?2) OR (ul.user_id = ?2 AND ulm.user_id = ?1))",
+        params![user_a, user_b],
+        |r| r.get::<_, i64>(0),
+    )
+    .unwrap_or(0)
+        > 0
+}
+
 pub fn init_db(db_path: &str) -> Result<Connection, rusqlite::Error> {
     let conn = if db_path == ":memory:" {
         Connection::open_in_memory()?
@@ -17,7 +43,7 @@ pub fn init_db(db_path: &str) -> Result<Connection, rusqlite::Error> {
         Connection::open(db_path)?
     };
 
-    conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
+    conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;")?;
 
     conn.execute_batch(
         r#"
@@ -179,6 +205,7 @@ pub fn init_db(db_path: &str) -> Result<Connection, rusqlite::Error> {
             post_id INTEGER REFERENCES posts(id) ON DELETE SET NULL,
             message_id INTEGER,
             stream_id INTEGER,
+            reel_id INTEGER,
             invoice_id INTEGER,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
@@ -314,6 +341,23 @@ pub fn init_db(db_path: &str) -> Result<Connection, rusqlite::Error> {
             rejection_reason TEXT,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
+
+        CREATE TABLE IF NOT EXISTS referrals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            referrer_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            referred_user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+            referral_code TEXT NOT NULL,
+            bonus_amount REAL NOT NULL DEFAULT 5.0,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS story_views (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            story_id INTEGER NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+            viewer_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(story_id, viewer_user_id)
+        );
         "#,
     )?;
 
@@ -333,8 +377,8 @@ fn seed_db(conn: &Connection) -> Result<(), rusqlite::Error> {
 
     // 1. Admin & Creator: Aria Vance
     conn.execute(
-        "INSERT INTO users (id, name, username, email, password_hash, role_id, bio, location, website, avatar, cover, profile_access_price, profile_access_price_3_months, profile_access_price_6_months, profile_access_price_12_months, public_profile, paid_profile, open_profile, identity_verified_at, email_verified_at, referral_code, country)
-         VALUES (1, 'Aria Vance', 'ariavance', 'aria@justfans.local', ?1, 1, 'Digital artist, cosplayer & exclusive visual storyteller. New high-res photo sets & behind-the-scenes videos every Tuesday & Friday ✨', 'Los Angeles, CA', 'https://ariavance.art', '/img/default-avatar.jpg', '/img/default-cover.png', 14.99, 11.99, 9.99, 7.99, 1, 1, 0, datetime('now'), datetime('now'), 'ARIA2026', 'United States')",
+        "INSERT INTO users (id, name, username, email, password_hash, role_id, bio, location, website, avatar, cover, profile_access_price, profile_access_price_3_months, profile_access_price_6_months, profile_access_price_12_months, public_profile, paid_profile, open_profile, identity_verified_at, email_verified_at, referral_code, first_name, last_name, billing_address, city, state, postcode, country)
+         VALUES (1, 'Aria Vance', 'ariavance', 'aria@justfans.local', ?1, 1, 'Digital artist, cosplayer & exclusive visual storyteller. New high-res photo sets & behind-the-scenes videos every Tuesday & Friday ✨', 'Los Angeles, CA', 'https://ariavance.art', '/img/default-avatar.jpg', '/img/default-cover.png', 14.99, 11.99, 9.99, 7.99, 1, 1, 0, datetime('now'), datetime('now'), 'ARIA2026', 'Aria', 'Vance', '742 Evergreen Terrace, Suite 4B', 'Los Angeles', 'CA', '90001', 'United States')",
         params![default_hash],
     )?;
 
@@ -413,6 +457,20 @@ fn seed_db(conn: &Connection) -> Result<(), rusqlite::Error> {
         "INSERT OR IGNORE INTO user_list_members (list_id, user_id) VALUES (?1, 1), (?1, 3)",
         params![alex_following_list],
     )?;
+
+    // Sync followers lists for seeded follows (Aria->2,3 and Alex->1,3)
+    for (target_uid, follower_uid) in [(1_i64, 4_i64), (2_i64, 1_i64), (3_i64, 1_i64), (3_i64, 4_i64)] {
+        if let Ok(followers_list_id) = conn.query_row::<i64, _, _>(
+            "SELECT id FROM user_lists WHERE user_id = ?1 AND list_type = 'followers'",
+            params![target_uid],
+            |r| r.get(0),
+        ) {
+            let _ = conn.execute(
+                "INSERT OR IGNORE INTO user_list_members (list_id, user_id) VALUES (?1, ?2)",
+                params![followers_list_id, follower_uid],
+            );
+        }
+    }
 
     // Seed Posts
     conn.execute(
@@ -615,7 +673,8 @@ pub fn get_user_public_profile(
                 birthdate, gender_pronoun, profile_access_price, profile_access_price_3_months,
                 profile_access_price_6_months, profile_access_price_12_months,
                 public_profile, paid_profile, open_profile, enable_2fa, enable_geoblocking,
-                identity_verified_at, referral_code, created_at
+                identity_verified_at, referral_code, created_at,
+                first_name, last_name, billing_address, city, country, state, postcode
          FROM users WHERE id = ?1",
     )?;
 
@@ -639,6 +698,16 @@ pub fn get_user_public_profile(
         let fans_count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM subscriptions WHERE recipient_user_id = ?1 AND status = 'completed' AND expires_at >= datetime('now')",
+                params![uid],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+
+        let followers_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM user_list_members ulm
+                 JOIN user_lists ul ON ulm.list_id = ul.id
+                 WHERE ul.user_id = ?1 AND ul.list_type = 'followers'",
                 params![uid],
                 |r| r.get(0),
             )
@@ -671,12 +740,14 @@ pub fn get_user_public_profile(
             .unwrap_or(0);
 
         let wallet_balance: f64 = if is_owner_or_admin {
-            conn.query_row(
-                "SELECT total FROM wallets WHERE user_id = ?1",
-                params![uid],
-                |r| r.get(0),
+            round_money(
+                conn.query_row(
+                    "SELECT total FROM wallets WHERE user_id = ?1",
+                    params![uid],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0.0),
             )
-            .unwrap_or(0.0)
         } else {
             0.0
         };
@@ -711,6 +782,20 @@ pub fn get_user_public_profile(
             false
         };
 
+        let is_blocked = if let Some(vid) = viewer_id {
+            conn.query_row(
+                "SELECT COUNT(*) FROM user_list_members ulm
+                 JOIN user_lists ul ON ulm.list_id = ul.id
+                 WHERE ul.user_id = ?1 AND ul.list_type = 'blocked' AND ulm.user_id = ?2",
+                params![vid, uid],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or(0)
+                > 0
+        } else {
+            false
+        };
+
         Ok(UserPublicProfile {
             id: uid,
             name: row.get(1)?,
@@ -735,12 +820,21 @@ pub fn get_user_public_profile(
             enable_geoblocking: if is_owner_or_admin { row.get::<_, i64>(20)? != 0 } else { false },
             is_verified: identity_verified_at.is_some(),
             fans_count,
+            followers_count,
             following_count,
             posts_count,
             media_count,
             is_subscribed,
             is_following,
+            is_blocked,
             wallet_balance,
+            first_name: if is_owner_or_admin { row.get(24)? } else { None },
+            last_name: if is_owner_or_admin { row.get(25)? } else { None },
+            billing_address: if is_owner_or_admin { row.get(26)? } else { None },
+            city: if is_owner_or_admin { row.get(27)? } else { None },
+            country: if is_owner_or_admin { row.get(28)? } else { None },
+            state: if is_owner_or_admin { row.get(29)? } else { None },
+            postcode: if is_owner_or_admin { row.get(30)? } else { None },
             referral_code: row.get(22)?,
             created_at: row.get(23)?,
         })
@@ -973,52 +1067,57 @@ pub fn build_post_view(
             })
         };
 
-        // Load recent comments
-        let mut cmt_stmt = conn.prepare(
-            "SELECT c.id, c.post_id, c.user_id, u.name, u.username, u.avatar, u.identity_verified_at, c.message, c.created_at
-             FROM post_comments c
-             JOIN users u ON c.user_id = u.id
-             WHERE c.post_id = ?1
-             ORDER BY c.id ASC",
-        )?;
-        let comments: Vec<PostCommentView> = cmt_stmt
-            .query_map(params![pid], |crow| {
-                let cid: i64 = crow.get(0)?;
-                let c_verified: Option<String> = crow.get(6)?;
-                let clikes: i64 = conn
-                    .query_row(
-                        "SELECT COUNT(*) FROM reactions WHERE post_comment_id = ?1",
-                        params![cid],
-                        |r| r.get(0),
-                    )
-                    .unwrap_or(0);
-                let culiked = if let Some(vid) = viewer_id {
-                    conn.query_row(
-                        "SELECT COUNT(*) FROM reactions WHERE post_comment_id = ?1 AND user_id = ?2",
-                        params![cid, vid],
-                        |r| r.get::<_, i64>(0),
-                    )
-                    .unwrap_or(0)
-                        > 0
-                } else {
-                    false
-                };
-                Ok(PostCommentView {
-                    id: cid,
-                    post_id: crow.get(1)?,
-                    user_id: crow.get(2)?,
-                    user_name: crow.get(3)?,
-                    user_username: crow.get(4)?,
-                    user_avatar: crow.get(5)?,
-                    user_verified: c_verified.is_some(),
-                    message: crow.get(7)?,
-                    likes_count: clikes,
-                    user_liked: culiked,
-                    created_at: crow.get(8)?,
-                })
-            })?
-            .filter_map(Result::ok)
-            .collect();
+        // Load recent comments (only if post is unlocked)
+        let comments: Vec<PostCommentView> = if !is_unlocked {
+            Vec::new()
+        } else {
+            let mut cmt_stmt = conn.prepare(
+                "SELECT c.id, c.post_id, c.user_id, u.name, u.username, u.avatar, u.identity_verified_at, c.message, c.created_at
+                 FROM post_comments c
+                 JOIN users u ON c.user_id = u.id
+                 WHERE c.post_id = ?1
+                 ORDER BY c.id ASC",
+            )?;
+            let rows: Vec<PostCommentView> = cmt_stmt
+                .query_map(params![pid], |crow| {
+                    let cid: i64 = crow.get(0)?;
+                    let c_verified: Option<String> = crow.get(6)?;
+                    let clikes: i64 = conn
+                        .query_row(
+                            "SELECT COUNT(*) FROM reactions WHERE post_comment_id = ?1",
+                            params![cid],
+                            |r| r.get(0),
+                        )
+                        .unwrap_or(0);
+                    let culiked = if let Some(vid) = viewer_id {
+                        conn.query_row(
+                            "SELECT COUNT(*) FROM reactions WHERE post_comment_id = ?1 AND user_id = ?2",
+                            params![cid, vid],
+                            |r| r.get::<_, i64>(0),
+                        )
+                        .unwrap_or(0)
+                            > 0
+                    } else {
+                        false
+                    };
+                    Ok(PostCommentView {
+                        id: cid,
+                        post_id: crow.get(1)?,
+                        user_id: crow.get(2)?,
+                        user_name: crow.get(3)?,
+                        user_username: crow.get(4)?,
+                        user_avatar: crow.get(5)?,
+                        user_verified: c_verified.is_some(),
+                        message: crow.get(7)?,
+                        likes_count: clikes,
+                        user_liked: culiked,
+                        created_at: crow.get(8)?,
+                    })
+                })?
+                .filter_map(Result::ok)
+                .collect();
+            rows
+        };
 
         Ok(PostView {
             id: pid,

@@ -94,3 +94,4 @@ cd frontend && npm run build
 
 ### Symptom: Next.js API calls return `500` or `ECONNREFUSED`
 - Ensure the Rust backend is running and listening on the port configured in `BACKEND_URL` (default `http://127.0.0.1:8080`).
+

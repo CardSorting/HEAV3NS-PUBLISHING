@@ -4,11 +4,13 @@ import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { apiFetch, PostItem, StoryItem, UserProfile } from '@/lib/api';
+import { useAuth } from '@/context/AuthContext';
 import { AppShell } from '@/components/AppShell';
 import { CreatorSuggestionCard, PostCard } from '@/components/PostCard';
 
 export default function FeedPage() {
   const router = useRouter();
+  const { user } = useAuth();
   const [posts, setPosts] = useState<PostItem[]>([]);
   const [suggestions, setSuggestions] = useState<UserProfile[]>([]);
   const [stories, setStories] = useState<StoryItem[]>([]);
@@ -38,6 +40,49 @@ export default function FeedPage() {
   useEffect(() => {
     loadFeed(feedFilter);
   }, [feedFilter]);
+
+  const handleOpenStory = async (story: StoryItem) => {
+    setActiveStory(story);
+    try {
+      const res = await apiFetch(`/api/stories/${story.id}/view`, { method: 'POST' });
+      setStories((prev) =>
+        prev.map((s) =>
+          s.id === story.id ? { ...s, views_count: res.views_count ?? s.views_count } : s
+        )
+      );
+      setActiveStory((prev) =>
+        prev && prev.id === story.id
+          ? { ...prev, views_count: res.views_count ?? prev.views_count }
+          : prev
+      );
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleToggleStoryHighlight = async (storyId: number) => {
+    try {
+      const res = await apiFetch(`/api/stories/${storyId}/pin`, { method: 'POST' });
+      setStories((prev) =>
+        prev.map((s) => (s.id === storyId ? { ...s, is_highlight: res.is_highlight } : s))
+      );
+      setActiveStory((prev) =>
+        prev && prev.id === storyId ? { ...prev, is_highlight: res.is_highlight } : prev
+      );
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleDeleteStory = async (storyId: number) => {
+    try {
+      await apiFetch(`/api/stories/${storyId}`, { method: 'DELETE' });
+      setStories((prev) => prev.filter((s) => s.id !== storyId));
+      setActiveStory(null);
+    } catch {
+      // ignore
+    }
+  };
 
   const handleToggleFreeSuggestions = async () => {
     const next = !freeOnly;
@@ -109,7 +154,7 @@ export default function FeedPage() {
               <button
                 key={story.id}
                 type="button"
-                onClick={() => setActiveStory(story)}
+                onClick={() => handleOpenStory(story)}
                 className="btn p-0 border-0 text-center flex-shrink-0"
                 style={{ width: 72 }}
               >
@@ -138,33 +183,74 @@ export default function FeedPage() {
                 <div className="card-header bg-dark text-white d-flex justify-content-between align-items-center">
                   <div className="d-flex align-items-center gap-2">
                     <img
-                      src={activeStory.user_avatar}
+                      src={activeStory.user_avatar || '/img/default-avatar.jpg'}
                       alt={activeStory.user_name}
                       className="rounded-circle"
-                      style={{ width: 34, height: 34 }}
+                      style={{ width: 34, height: 34, objectFit: 'cover' }}
                     />
                     <div>
                       <div className="fw-bold small">{activeStory.user_name}</div>
                       <div className="text-white-50" style={{ fontSize: 11 }}>
-                        @{activeStory.user_username}
+                        @{activeStory.user_username} · 👁️ {activeStory.views_count} views
                       </div>
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setActiveStory(null)}
-                    className="btn btn-sm btn-outline-light rounded-pill"
-                  >
-                    ✕
-                  </button>
+                  <div className="d-flex align-items-center gap-1">
+                    {user && (user.id === activeStory.user_id || user.role_id === 1) && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleStoryHighlight(activeStory.id)}
+                          className={`btn btn-sm rounded-pill ${
+                            activeStory.is_highlight ? 'btn-warning' : 'btn-outline-light'
+                          }`}
+                          title="Pin or unpin story highlight"
+                        >
+                          ⭐
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteStory(activeStory.id)}
+                          className="btn btn-sm btn-outline-danger rounded-pill"
+                          title="Delete story"
+                        >
+                          🗑️
+                        </button>
+                      </>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setActiveStory(null)}
+                      className="btn btn-sm btn-outline-light rounded-pill"
+                    >
+                      ✕
+                    </button>
+                  </div>
                 </div>
                 <div className="card-body bg-dark text-white text-center p-4">
-                  <img
-                    src={activeStory.media_url}
-                    alt="Story"
-                    className="img-fluid rounded-3 mb-3"
-                    style={{ maxHeight: 340 }}
-                  />
+                  {activeStory.media_url ? (
+                    activeStory.media_type === 'video' ||
+                    activeStory.media_url.endsWith('.mp4') ||
+                    activeStory.media_url.endsWith('.webm') ? (
+                      <video
+                        src={activeStory.media_url}
+                        controls
+                        autoPlay
+                        muted
+                        playsInline
+                        loop
+                        className="w-100 rounded-3 mb-3 bg-black"
+                        style={{ maxHeight: 340, objectFit: 'contain' }}
+                      />
+                    ) : (
+                      <img
+                        src={activeStory.media_url}
+                        alt="Story"
+                        className="img-fluid rounded-3 mb-3"
+                        style={{ maxHeight: 340 }}
+                      />
+                    )
+                  ) : null}
                   <p className="mb-0 fw-semibold">{activeStory.caption}</p>
                 </div>
               </div>

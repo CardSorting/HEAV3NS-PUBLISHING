@@ -17,6 +17,7 @@ function SettingsContent() {
   const [subscriptions, setSubscriptions] = useState<any[]>([]);
   const [transactions, setTransactions] = useState<any[]>([]);
   const [withdrawals, setWithdrawals] = useState<any[]>([]);
+  const [referrals, setReferrals] = useState<any[]>([]);
   const [verification, setVerification] = useState<any>(null);
   const [verifyFiles, setVerifyFiles] = useState('');
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -49,9 +50,16 @@ function SettingsContent() {
   const [withdrawMethod, setWithdrawMethod] = useState('Bank Transfer (IBAN)');
   const [withdrawIdentifier, setWithdrawIdentifier] = useState('');
 
-  // Account
+  // Account & Billing
   const [email, setEmail] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [billingAddress, setBillingAddress] = useState('');
+  const [city, setCity] = useState('');
+  const [country, setCountry] = useState('');
+  const [stateRegion, setStateRegion] = useState('');
+  const [postcode, setPostcode] = useState('');
 
   // Privacy
   const [publicProfile, setPublicProfile] = useState(true);
@@ -66,6 +74,7 @@ function SettingsContent() {
       setSubscriptions(res.subscriptions || []);
       setTransactions(res.transactions || []);
       setWithdrawals(res.withdrawals || []);
+      setReferrals(res.referrals || []);
       setVerification(res.verification || null);
 
       setName(p.name);
@@ -86,6 +95,15 @@ function SettingsContent() {
       setPrice12(String(p.profile_access_price_12_months));
 
       setEmail(p.email);
+      if (res.billing) {
+        setFirstName(res.billing.first_name || '');
+        setLastName(res.billing.last_name || '');
+        setBillingAddress(res.billing.billing_address || '');
+        setCity(res.billing.city || '');
+        setCountry(res.billing.country || '');
+        setStateRegion(res.billing.state || '');
+        setPostcode(res.billing.postcode || '');
+      }
       setPublicProfile(p.public_profile);
       setEnable2fa(p.enable_2fa);
       setEnableGeoblocking(p.enable_geoblocking);
@@ -279,11 +297,19 @@ function SettingsContent() {
         body: JSON.stringify({
           email,
           new_password: newPassword || undefined,
+          first_name: firstName,
+          last_name: lastName,
+          billing_address: billingAddress,
+          city,
+          country,
+          state: stateRegion,
+          postcode,
         }),
       });
       setStatusMessage(res.message);
       setNewPassword('');
       await refreshUser();
+      await loadSettings();
     } catch (err: any) {
       setErrorMessage(err.message);
     } finally {
@@ -319,7 +345,7 @@ function SettingsContent() {
     { key: 'subscriptions', label: '💎 Subscriptions' },
     { key: 'payments', label: '🧾 Payments & Invoices' },
     { key: 'verify', label: '✅ Creator Verification' },
-    { key: 'account', label: '🔒 Account Security' },
+    { key: 'account', label: '🔒 Account & Billing' },
     { key: 'privacy', label: '🛡️ Privacy & 2FA' },
     { key: 'referrals', label: '🎁 Referrals' },
   ];
@@ -908,34 +934,107 @@ function SettingsContent() {
         )}
 
         {activeTab === 'account' && (
-          <form onSubmit={handleSaveAccount} className="d-grid gap-3" style={{ maxWidth: 520 }}>
-            <h4 className="fw-bold mb-1">Account Security</h4>
-            <div>
-              <label className="form-label small fw-bold">Email Address</label>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="form-control rounded-pill px-3"
-              />
+          <form onSubmit={handleSaveAccount} className="d-grid gap-3" style={{ maxWidth: 620 }}>
+            <h4 className="fw-bold mb-1">Account Security & Billing Details</h4>
+            <div className="row g-3">
+              <div className="col-md-6">
+                <label className="form-label small fw-bold">Email Address</label>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="form-control rounded-pill px-3"
+                />
+              </div>
+              <div className="col-md-6">
+                <label className="form-label small fw-bold">
+                  New Password (leave blank to keep)
+                </label>
+                <input
+                  type="password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="form-control rounded-pill px-3"
+                />
+              </div>
             </div>
-            <div>
-              <label className="form-label small fw-bold">New Password (leave blank to keep)</label>
-              <input
-                type="password"
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="••••••••"
-                className="form-control rounded-pill px-3"
-              />
+
+            <hr className="my-2" />
+            <h6 className="fw-bold mb-0">Billing Address (for Tax Invoices)</h6>
+            <div className="row g-3">
+              <div className="col-md-6">
+                <label className="form-label small fw-bold">First Name</label>
+                <input
+                  type="text"
+                  value={firstName}
+                  onChange={(e) => setFirstName(e.target.value)}
+                  className="form-control rounded-pill px-3"
+                />
+              </div>
+              <div className="col-md-6">
+                <label className="form-label small fw-bold">Last Name</label>
+                <input
+                  type="text"
+                  value={lastName}
+                  onChange={(e) => setLastName(e.target.value)}
+                  className="form-control rounded-pill px-3"
+                />
+              </div>
+              <div className="col-12">
+                <label className="form-label small fw-bold">Street Address</label>
+                <input
+                  type="text"
+                  value={billingAddress}
+                  onChange={(e) => setBillingAddress(e.target.value)}
+                  className="form-control rounded-pill px-3"
+                />
+              </div>
+              <div className="col-md-3">
+                <label className="form-label small fw-bold">City</label>
+                <input
+                  type="text"
+                  value={city}
+                  onChange={(e) => setCity(e.target.value)}
+                  className="form-control rounded-pill px-3"
+                />
+              </div>
+              <div className="col-md-3">
+                <label className="form-label small fw-bold">State / Province</label>
+                <input
+                  type="text"
+                  value={stateRegion}
+                  onChange={(e) => setStateRegion(e.target.value)}
+                  className="form-control rounded-pill px-3"
+                />
+              </div>
+              <div className="col-md-3">
+                <label className="form-label small fw-bold">Postal Code</label>
+                <input
+                  type="text"
+                  value={postcode}
+                  onChange={(e) => setPostcode(e.target.value)}
+                  className="form-control rounded-pill px-3"
+                />
+              </div>
+              <div className="col-md-3">
+                <label className="form-label small fw-bold">Country</label>
+                <input
+                  type="text"
+                  value={country}
+                  onChange={(e) => setCountry(e.target.value)}
+                  className="form-control rounded-pill px-3"
+                />
+              </div>
             </div>
+
             <div>
               <button
                 type="submit"
                 disabled={busy}
                 className="btn btn-primary rounded-pill px-5 fw-bold"
               >
-                Update Account
+                Update Account & Billing
               </button>
             </div>
           </form>
@@ -996,16 +1095,70 @@ function SettingsContent() {
           <div style={{ maxWidth: 620 }}>
             <h4 className="fw-bold mb-2">Creator Referral Program</h4>
             <p className="text-muted small mb-3">
-              Share your personal referral link and earn a 5% bonus commission on referred creator
-              revenues.
+              Share your personal referral link and earn a $5.00 bonus whenever a new member joins
+              with your code (they also receive an extra $5.00 welcome bonus!).
             </p>
-            <div className="p-3 rounded-4 border bg-body-tertiary">
+            <div className="p-3 rounded-4 border bg-body-tertiary mb-4">
               <div className="small fw-bold text-uppercase text-muted mb-1">Your Referral Code</div>
-              <div className="fs-4 fw-bold text-primary">{profile?.referral_code || 'JUSTFANS'}</div>
+              <div className="d-flex justify-content-between align-items-center">
+                <div className="fs-4 fw-bold text-primary">
+                  {profile?.referral_code || 'JUSTFANS'}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const url = `${window.location.origin}/register?ref=${
+                      profile?.referral_code || ''
+                    }`;
+                    navigator.clipboard?.writeText(url);
+                    setStatusMessage('Referral link copied to clipboard!');
+                  }}
+                  className="btn btn-sm btn-outline-primary rounded-pill px-3"
+                >
+                  📋 Copy Link
+                </button>
+              </div>
               <div className="small text-muted mt-2">
-                Referral URL: <code>https://justfans.local/register?ref={profile?.referral_code}</code>
+                Referral URL:{' '}
+                <code>
+                  /register?ref={profile?.referral_code}
+                </code>
               </div>
             </div>
+
+            <h6 className="fw-bold mb-2">Referred Members ({referrals.length})</h6>
+            {referrals.length === 0 ? (
+              <div className="p-3 rounded-4 border text-muted small">
+                No members have signed up with your referral code yet.
+              </div>
+            ) : (
+              <div className="list-group rounded-4 overflow-hidden">
+                {referrals.map((r) => (
+                  <div
+                    key={r.id}
+                    className="list-group-item d-flex justify-content-between align-items-center"
+                  >
+                    <div className="d-flex align-items-center gap-2">
+                      <img
+                        src={r.used_by_avatar || '/img/default-avatar.jpg'}
+                        alt={r.used_by_name}
+                        className="rounded-circle"
+                        style={{ width: 32, height: 32, objectFit: 'cover' }}
+                      />
+                      <div>
+                        <div className="fw-bold small">{r.used_by_name}</div>
+                        <div className="text-muted" style={{ fontSize: 11 }}>
+                          @{r.used_by_username} · {r.created_at}
+                        </div>
+                      </div>
+                    </div>
+                    <span className="badge bg-success-subtle text-success rounded-pill">
+                      +${Number(r.bonus_amount || 5).toFixed(2)} Bonus
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>

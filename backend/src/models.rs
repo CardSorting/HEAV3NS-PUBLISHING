@@ -64,12 +64,30 @@ pub struct UserPublicProfile {
     pub enable_geoblocking: bool,
     pub is_verified: bool,
     pub fans_count: i64,
+    #[serde(default)]
+    pub followers_count: i64,
     pub following_count: i64,
     pub posts_count: i64,
     pub media_count: i64,
     pub is_subscribed: bool,
     pub is_following: bool,
+    #[serde(default)]
+    pub is_blocked: bool,
     pub wallet_balance: f64,
+    #[serde(default)]
+    pub first_name: Option<String>,
+    #[serde(default)]
+    pub last_name: Option<String>,
+    #[serde(default)]
+    pub billing_address: Option<String>,
+    #[serde(default)]
+    pub city: Option<String>,
+    #[serde(default)]
+    pub country: Option<String>,
+    #[serde(default)]
+    pub state: Option<String>,
+    #[serde(default)]
+    pub postcode: Option<String>,
     pub referral_code: String,
     pub created_at: String,
 }

@@ -65,3 +65,4 @@ curl -s http://127.0.0.1:8080/api/posts/2 | jq '{id: .post.id, is_unlocked: .pos
 #   "files": ["/img/locked-media.svg"]
 # }
 ```
+

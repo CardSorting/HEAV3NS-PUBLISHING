@@ -47,3 +47,4 @@ Added [`test_privacy_paywall_reels_and_moderation`](file:///Users/bozoegg/Deskto
 - Locked PPV posts return `text == ""`, `poll == null`, and `attachments[].file_url == "/img/locked-media.svg"`.
 - Locked post attachments do not appear in `/api/profile/:username` `recent_media`.
 - Paid/VIP streams return `is_unlocked == false` and `hls_url == "/img/locked-stream.m3u8"` until unlocked.
+

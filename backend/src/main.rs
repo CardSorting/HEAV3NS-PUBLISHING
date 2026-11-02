@@ -53,7 +53,12 @@ pub fn build_app(state: AppState) -> Router {
         .route("/posts/bookmark", post(handlers::toggle_bookmark))
         .route("/posts/pin", post(handlers::toggle_pin_post))
         .route("/posts/comments", post(handlers::add_comment))
-        .route("/posts/comments/:comment_id", delete(handlers::delete_comment))
+        .route(
+            "/posts/comments/:comment_id",
+            delete(handlers::delete_comment)
+                .put(handlers::edit_comment)
+                .post(handlers::edit_comment),
+        )
         .route("/posts/polls/vote", post(handlers::vote_poll))
         .route("/posts/:post_id", get(handlers::get_single_post).delete(handlers::delete_post))
         // Profiles & Search
@@ -64,11 +69,19 @@ pub fn build_app(state: AppState) -> Router {
         .route("/lists", get(handlers::get_lists).post(handlers::save_list))
         .route("/lists/members", post(handlers::toggle_list_member))
         .route("/lists/follow", post(handlers::toggle_follow))
-        .route("/lists/:list_id", get(handlers::get_list_detail).delete(handlers::delete_list))
+        .route("/lists/block", post(handlers::toggle_block_user))
+        .route(
+            "/lists/:list_id",
+            get(handlers::get_list_detail)
+                .put(handlers::rename_list)
+                .delete(handlers::delete_list),
+        )
+        .route("/lists/:list_id/clear", post(handlers::clear_list))
         // Messenger
         .route("/messenger/contacts", get(handlers::get_messenger_contacts))
         .route("/messenger/messages/:user_id", get(handlers::get_messages_with_user))
         .route("/messenger/send", post(handlers::send_message))
+        .route("/messenger/pin/:message_id", post(handlers::toggle_pin_message))
         .route("/messenger/message/:message_id", delete(handlers::delete_message))
         // Notifications
         .route("/notifications", get(handlers::get_notifications))
@@ -87,16 +100,25 @@ pub fn build_app(state: AppState) -> Router {
         // Media Vault & Uploads
         .route("/vault", get(handlers::get_vault_items))
         .route("/vault/:att_id", delete(handlers::delete_vault_item))
+        .route("/vault/:att_id/archive", post(handlers::toggle_archive_vault_item))
         .route("/attachment/upload", post(handlers::upload_attachment))
         // Reels, Stories & Streams
         .route("/reels", get(handlers::get_reels).post(handlers::create_reel))
         .route("/reels/comments", post(handlers::add_reel_comment))
+        .route("/reels/comments/:comment_id", delete(handlers::delete_reel_comment))
         .route("/reels/:reel_id", delete(handlers::delete_reel))
+        .route("/reels/:reel_id/view", post(handlers::increment_reel_view))
         .route("/reels/:reel_id/comments", get(handlers::get_reel_comments))
         .route("/stories", get(handlers::get_stories).post(handlers::create_story))
+        .route("/stories/:story_id", delete(handlers::delete_story))
+        .route("/stories/:story_id/view", post(handlers::increment_story_view))
+        .route("/stories/:story_id/pin", post(handlers::toggle_story_highlight))
         .route("/streams", get(handlers::get_streams).post(handlers::save_stream))
         .route("/streams/comment", post(handlers::add_stream_comment))
-        .route("/streams/:stream_id", get(handlers::get_stream_detail))
+        .route(
+            "/streams/:stream_id",
+            get(handlers::get_stream_detail).delete(handlers::delete_stream),
+        )
         .route("/streams/:stream_id/stop", post(handlers::stop_stream))
         // Public Pages, Contact, Reports, AI & Admin
         .route("/pages/:slug", get(handlers::get_public_page))
@@ -1046,5 +1068,790 @@ mod tests {
         )
         .await;
         assert_eq!(alex_prof["profile"]["is_verified"], true);
+    }
+
+    #[tokio::test]
+    async fn test_deep_hardening_and_parity_features() {
+        let app = setup_test_app();
+
+        // 1. Referral code registration bonus (+$5.00 to referrer Aria `ARIA2026`, $100.00 default + $5.00 = $105.00 to new user)
+        let reg_res = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/auth/register")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "name": "Chloe Fan",
+                                "username": "chloefan",
+                                "email": "chloe@justfans.local",
+                                "password": "password123",
+                                "referral_code": "ARIA2026"
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        let chloe_token = reg_res["token"].as_str().unwrap().to_string();
+        let chloe_id = reg_res["user"]["id"].as_i64().unwrap();
+        assert_eq!(reg_res["user"]["wallet_balance"], 105.0);
+
+        // Login as Aria (user 1) & Alex (user 4)
+        let aria_login = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/auth/login")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "email": "aria@justfans.local",
+                                "password": "password123"
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        let aria_token = aria_login["token"].as_str().unwrap().to_string();
+
+        // 2. Locked post comment & poll vote enforcement:
+        // Post 2 is Aria's PPV post ($14.99). First Aria posts a comment on her own Post 2.
+        let _ = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/posts/comments")
+                    .header("authorization", format!("Bearer {aria_token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "post_id": 2,
+                            "message": "VIP comment inside locked post"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Chloe has not unlocked Post 2, so fetching Post 2 must mask its comments (`comments == []`)
+        let locked_post_view = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/posts/2")
+                        .header("authorization", format!("Bearer {chloe_token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(locked_post_view["post"]["is_unlocked"], false);
+        assert_eq!(
+            locked_post_view["post"]["comments"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0,
+            "Locked post must not leak comments to non-purchasers"
+        );
+
+        // And commenting on locked Post 2 must return 403 Forbidden.
+        let locked_cmt = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/posts/comments")
+                    .header("authorization", format!("Bearer {chloe_token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "post_id": 2,
+                            "message": "Trying to comment on locked post"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(locked_cmt.status(), StatusCode::FORBIDDEN);
+
+        // Comment on unlocked post 4 (Elena's open_profile post) & then edit comment
+        let cmt_res = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/posts/comments")
+                        .header("authorization", format!("Bearer {chloe_token}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "post_id": 4,
+                                "message": "Initial comment text"
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        let cmt_id = cmt_res["comment"]["id"].as_i64().unwrap();
+
+        let edit_cmt_res = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("PUT")
+                        .uri(format!("/api/posts/comments/{cmt_id}"))
+                        .header("authorization", format!("Bearer {chloe_token}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "message": "Edited comment text!"
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(edit_cmt_res["message"], "Edited comment text!");
+
+        // 3. Follower list sync & custom list rename/clear
+        let follow_res = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/lists/follow")
+                        .header("authorization", format!("Bearer {chloe_token}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({ "target_user_id": 1 }).to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(follow_res["is_following"], true);
+
+        // Check Aria's lists — her "Followers" list should include Chloe
+        let aria_lists = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/lists")
+                        .header("authorization", format!("Bearer {aria_token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        let followers_list = aria_lists["lists"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|l| l["list_type"] == "followers")
+            .unwrap();
+        assert!(followers_list["members_count"].as_i64().unwrap() >= 2);
+
+        // Create custom list, add member, rename, and clear
+        let new_list = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/lists")
+                        .header("authorization", format!("Bearer {chloe_token}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({ "name": "Top Creators" }).to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        let custom_list_id = new_list["list_id"].as_i64().unwrap();
+
+        let _ = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/lists/members")
+                    .header("authorization", format!("Bearer {chloe_token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "list_id": custom_list_id,
+                            "member_user_id": 1
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let rename_res = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("PUT")
+                        .uri(format!("/api/lists/{custom_list_id}"))
+                        .header("authorization", format!("Bearer {chloe_token}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({ "name": "VIP Creators" }).to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(rename_res["name"], "VIP Creators");
+
+        let clear_res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/lists/{custom_list_id}/clear"))
+                    .header("authorization", format!("Bearer {chloe_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(clear_res.status(), StatusCode::OK);
+
+        // 4. Blocking enforcement: Aria blocks Chloe -> Chloe cannot view Aria's profile or DM her
+        let block_res = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/lists/block")
+                        .header("authorization", format!("Bearer {aria_token}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({ "target_user_id": chloe_id }).to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(block_res["is_blocked"], true);
+
+        let blocked_prof = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/profile/ariavance")
+                    .header("authorization", format!("Bearer {chloe_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(blocked_prof.status(), StatusCode::FORBIDDEN);
+
+        let blocked_dm = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/messenger/send")
+                    .header("authorization", format!("Bearer {chloe_token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "receiver_id": 1,
+                            "message": "Hello while blocked"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(blocked_dm.status(), StatusCode::FORBIDDEN);
+
+        // Unblock Chloe
+        let unblock_res = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/lists/block")
+                        .header("authorization", format!("Bearer {aria_token}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({ "target_user_id": chloe_id }).to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(unblock_res["is_blocked"], false);
+
+        // 5. Messenger pinning & purchased PPV message deletion protection
+        let ppv_msg = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/messenger/send")
+                        .header("authorization", format!("Bearer {aria_token}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "receiver_id": chloe_id,
+                                "message": "Exclusive PPV photo set",
+                                "price": 5.0
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        let ppv_msg_id = ppv_msg["message"]["id"].as_i64().unwrap();
+
+        let pin_msg_res = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("/api/messenger/pin/{ppv_msg_id}"))
+                        .header("authorization", format!("Bearer {chloe_token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(pin_msg_res["is_pinned"], true);
+
+        // Chloe unlocks the PPV message using provider: "wallet" -> must deduct $5.00 from Chloe's $105.00 balance!
+        let unlock_msg = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/payments/initiate")
+                        .header("authorization", format!("Bearer {chloe_token}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "payment_type": "message-unlock",
+                                "provider": "wallet",
+                                "amount": 999.0, // server must ignore client amount and charge 5.00
+                                "recipient_user_id": 1,
+                                "message_id": ppv_msg_id
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(unlock_msg["success"], true);
+        assert_eq!(
+            unlock_msg["wallet_balance"], 100.0,
+            "provider: 'wallet' must actually deduct $5.00 from Chloe's wallet balance"
+        );
+
+        // Aria attempts to delete the already-purchased PPV message -> must fail with 422
+        let del_purchased_msg = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/messenger/message/{ppv_msg_id}"))
+                    .header("authorization", format!("Bearer {aria_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(del_purchased_msg.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+        // 6. Media Vault archive & in-use attachment deletion protection
+        let archive_att = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/vault/att-seed-1/archive")
+                        .header("authorization", format!("Bearer {aria_token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(archive_att["is_archived"], true);
+
+        // Attempting to delete att-seed-1 (attached to Post 1) without removing post must return 422
+        let del_in_use_att = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/api/vault/att-seed-1")
+                    .header("authorization", format!("Bearer {aria_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(del_in_use_att.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+        // 7. Paid Reel creation, paywall masking, unlock payment & view increment
+        let paid_reel = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/reels")
+                        .header("authorization", format!("Bearer {aria_token}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "caption": "Premium Backstage Reel",
+                                "video_path": "/img/hero-video.mp4",
+                                "price": 4.5
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        let paid_reel_id = paid_reel["reel_id"].as_i64().unwrap();
+
+        // Chloe fetches reels -> paid reel should be locked with empty video_url
+        let chloe_reels = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/reels")
+                        .header("authorization", format!("Bearer {chloe_token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        let locked_reel = chloe_reels["reels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == paid_reel_id)
+            .unwrap();
+        assert_eq!(locked_reel["is_unlocked"], false);
+        assert_eq!(locked_reel["video_url"], "");
+
+        // Unlock paid reel via wallet -> balance drops from $100.00 to $95.50
+        let unlock_reel = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/payments/initiate")
+                        .header("authorization", format!("Bearer {chloe_token}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "payment_type": "reel-unlock",
+                                "provider": "wallet",
+                                "amount": 4.5,
+                                "recipient_user_id": 1,
+                                "reel_id": paid_reel_id
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(unlock_reel["success"], true);
+        assert_eq!(unlock_reel["wallet_balance"], 95.5);
+
+        // Verify unlocked reel now returns custom video_path "/img/hero-video.mp4"
+        let unlocked_reels = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/reels")
+                        .header("authorization", format!("Bearer {chloe_token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        let after_unlock_reel = unlocked_reels["reels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == paid_reel_id)
+            .unwrap();
+        assert_eq!(after_unlock_reel["is_unlocked"], true);
+        assert_eq!(after_unlock_reel["video_url"], "/img/hero-video.mp4");
+
+        // View increment on reel
+        let reel_view_res = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("/api/reels/{paid_reel_id}/view"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(reel_view_res["views_count"], 1);
+
+        // 8. Story view increment & highlight pin (story 1 starts with is_highlight = 1, so toggling turns it off then back on)
+        let story_unpin = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/stories/1/pin")
+                        .header("authorization", format!("Bearer {aria_token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(story_unpin["is_highlight"], false);
+
+        let story_pin = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/stories/1/pin")
+                        .header("authorization", format!("Bearer {aria_token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(story_pin["is_highlight"], true);
+
+        let story_view = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/stories/1/view")
+                        .header("authorization", format!("Bearer {chloe_token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert!(story_view["views_count"].as_i64().unwrap() >= 1);
+
+        // 9. Locked stream chat protection: Stream 2 requires subscription + $5 PPV
+        let locked_stream_cmt = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/streams/comment")
+                    .header("authorization", format!("Bearer {chloe_token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "stream_id": 2,
+                            "message": "Should fail while stream is locked"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(locked_stream_cmt.status(), StatusCode::FORBIDDEN);
+
+        // 10. Editing a post with an active poll preserves existing poll votes when options are unchanged,
+        // and scheduled posts with datetime-local format ("YYYY-MM-DDTHH:MM") are hidden from non-owners.
+        let edit_post1 = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/posts/save")
+                        .header("authorization", format!("Bearer {aria_token}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "id": 1,
+                                "text": "Updated caption for Post 1 without wiping poll votes!",
+                                "price": 0.0,
+                                "attachments": ["att-seed-1"],
+                                "poll_answers": [
+                                    "Cyberpunk Tokyo Rooftop",
+                                    "Ethereal Forest Fantasy",
+                                    "Behind-the-Scenes Vlog"
+                                ]
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            edit_post1["post"]["poll"]["total_votes"], 1,
+            "Editing post caption must preserve existing poll votes when options are unchanged"
+        );
+
+        // Create a future scheduled post using HTML datetime-local format ("2099-12-31T23:59")
+        let future_post = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/posts/save")
+                        .header("authorization", format!("Bearer {aria_token}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "text": "Future scheduled drop",
+                                "price": 0.0,
+                                "release_date": "2099-12-31T23:59"
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        let future_post_id = future_post["post"]["id"].as_i64().unwrap();
+        assert_eq!(future_post["post"]["release_date"], "2099-12-31 23:59:00");
+
+        // Non-owner fetching future scheduled post gets 404
+        let non_owner_future = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/posts/{future_post_id}"))
+                    .header("authorization", format!("Bearer {chloe_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(non_owner_future.status(), StatusCode::NOT_FOUND);
+
+        // Verify Aria's settings endpoint includes Chloe in referrals list and masks billing PII on public profile
+        let aria_settings = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/settings")
+                        .header("authorization", format!("Bearer {aria_token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            aria_settings["referrals"].as_array().unwrap().len(),
+            1,
+            "Referrals table must record referral usage and return it in /api/settings"
+        );
+        assert_eq!(
+            aria_settings["referrals"][0]["used_by_username"],
+            "chloefan"
+        );
+        assert_eq!(
+            aria_settings["profile"]["billing_address"],
+            "742 Evergreen Terrace, Suite 4B"
+        );
+
+        let public_aria = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/profile/ariavance")
+                        .header("authorization", format!("Bearer {chloe_token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert!(
+            public_aria["creator"]["billing_address"].is_null(),
+            "Public profile must mask billing_address PII from non-owners"
+        );
     }
 }

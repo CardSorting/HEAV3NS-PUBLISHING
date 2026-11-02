@@ -75,15 +75,33 @@ export default function BookmarksPage() {
                   {reels.map((r) => (
                     <div key={r.id} className="col-12 col-md-6">
                       <div className="card border rounded-4 overflow-hidden shadow-sm">
-                        <video
-                          src={r.video_url}
-                          poster={r.cover_url || '/img/home-scene-1.svg'}
-                          controls
-                          playsInline
-                          muted
-                          className="w-100 bg-dark"
-                          style={{ height: 220, objectFit: 'cover' }}
-                        />
+                        {r.is_unlocked && r.video_url ? (
+                          <video
+                            src={r.video_url}
+                            poster={r.cover_url || '/img/home-scene-1.svg'}
+                            controls
+                            playsInline
+                            muted
+                            className="w-100 bg-dark"
+                            style={{ height: 220, objectFit: 'cover' }}
+                          />
+                        ) : (
+                          <div
+                            className="w-100 bg-dark text-white d-flex flex-column justify-content-center align-items-center p-3 text-center"
+                            style={{ height: 220 }}
+                          >
+                            <div className="fs-3 mb-1">🔒</div>
+                            <div className="fw-bold small mb-2">
+                              Locked PPV Reel (${r.price.toFixed(2)})
+                            </div>
+                            <Link
+                              href="/reels"
+                              className="btn btn-sm btn-primary rounded-pill px-3"
+                            >
+                              Unlock in Reels
+                            </Link>
+                          </div>
+                        )}
                         <div className="card-body p-3 d-flex justify-content-between align-items-center">
                           <div className="overflow-hidden">
                             <Link

@@ -60,3 +60,4 @@ The `CreatePostRequest.attachment_ids` vector accepts strings that may be either
 
 - Verified in [`test_privacy_paywall_reels_and_moderation`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/main.rs) that voting on a poll with an `answer_id` belonging to another poll (or non-existent `answer_id`) returns `400 Bad Request` (`"Invalid answer_id for this poll"`).
 - Verified in [`test_posts_feed_comments_reactions_bookmarks`](file:///Users/bozoegg/Desktop/HEAV3NS-PUBLISHING/backend/src/main.rs) that creating and editing posts with existing vault attachments links the existing row without duplicating vault items.
+

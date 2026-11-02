@@ -43,3 +43,4 @@ We centralized all fan-to-creator and wallet deposit transactions into a single 
 
 ### Negative / Trade-offs
 - **Centralized Handler Complexity**: `initiate_payment` handles branching validation for 6 transaction types in a single function, requiring comprehensive integration test coverage (provided in `test_financial_security_and_withdrawals`).
+
