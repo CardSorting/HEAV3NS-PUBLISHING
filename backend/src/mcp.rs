@@ -76,7 +76,7 @@ pub fn get_mcp_tools_catalog() -> Vec<Value> {
             "name": "agent_token_create",
             "category": "Identity & Auth",
             "scope": "admin",
-            "description": "Provision a new scoped MCP Agent Token (hp_mcp_*) with granular scopes and per-tx / 24h spend caps.",
+            "description": "Provision a new scoped MCP Agent Token (hp_mcp_*) with granular scopes, relay pool tier assignment, and per-tx / 24h spend caps.",
             "inputSchema": {
                 "type": "object",
                 "required": ["name"],
@@ -84,7 +84,9 @@ pub fn get_mcp_tools_catalog() -> Vec<Value> {
                     "name": { "type": "string", "description": "Agent key name (e.g., 'Claude Autonomous Studio Agent')" },
                     "scopes": { "type": "array", "items": { "type": "string" }, "description": "Scopes: read, write, engage, monetize, messages, wallet, admin" },
                     "max_spend_per_tx": { "type": "number", "description": "Maximum USD spend per single transaction (default 50.0)" },
-                    "daily_spend_limit": { "type": "number", "description": "Maximum USD spend per rolling 24h window (default 200.0)" }
+                    "daily_spend_limit": { "type": "number", "description": "Maximum USD spend per rolling 24h window (default 200.0)" },
+                    "pool_tier": { "type": "string", "description": "Relay pool tier: central, premium, or studio (default central)" },
+                    "daily_action_quota": { "type": "integer", "description": "Optional custom daily soft action quota override" }
                 }
             }
         }),
@@ -563,14 +565,27 @@ pub fn get_mcp_tools_catalog() -> Vec<Value> {
             "name": "persona_brief",
             "category": "Autonomous Personas",
             "scope": "read",
-            "description": "Deterministically compile a no-inference autonomous execution brief from the persona's latest practice revision and recent activity continuity.",
+            "description": "Deterministically compile a no-inference autonomous execution brief from the persona's latest practice revision, recent activity continuity, and optional adult character references.",
             "inputSchema": {
                 "type": "object",
                 "required": ["persona_id", "intent"],
                 "properties": {
                     "persona_id": { "type": "string", "description": "Persona ID or handle" },
                     "intent": { "type": "string", "description": "Session goal or content drop objective" },
-                    "target_audience": { "type": "string", "description": "Optional audience segment" }
+                    "target_audience": { "type": "string", "description": "Optional audience segment" },
+                    "characters": {
+                        "type": "array",
+                        "description": "Optional adult (18+) character / model references for brief compilation",
+                        "items": {
+                            "type": "object",
+                            "required": ["name"],
+                            "properties": {
+                                "name": { "type": "string" },
+                                "role": { "type": "string" },
+                                "visual_notes": { "type": "string" }
+                            }
+                        }
+                    }
                 }
             }
         }),
@@ -578,16 +593,62 @@ pub fn get_mcp_tools_catalog() -> Vec<Value> {
             "name": "persona_record_activity",
             "category": "Autonomous Personas",
             "scope": "engage",
-            "description": "Append an immutable activity record to an autonomous persona's continuity ledger.",
+            "description": "Append an immutable activity record with work attribution and compiled brief continuity to an autonomous persona's ledger.",
             "inputSchema": {
                 "type": "object",
                 "required": ["persona_id", "action_type", "description"],
                 "properties": {
+                    "id": { "type": "string", "description": "Optional deterministic activity ID for exact replay idempotency" },
                     "persona_id": { "type": "string", "description": "Persona ID or handle" },
                     "action_type": { "type": "string", "description": "e.g. post_create, comment_reply, broadcast_drop" },
                     "target_resource_id": { "type": "string" },
+                    "work_ids": { "type": "array", "items": { "type": "string" }, "description": "Attributed post/reel/story/vault IDs (enforces cross-persona uniqueness)" },
+                    "characters": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["name"],
+                            "properties": {
+                                "name": { "type": "string" },
+                                "role": { "type": "string" },
+                                "visual_notes": { "type": "string" }
+                            }
+                        }
+                    },
                     "description": { "type": "string" },
                     "practice_revision": { "type": "integer" }
+                }
+            }
+        }),
+        json!({
+            "name": "persona_bootstrap_roster",
+            "category": "Autonomous Personas",
+            "scope": "write",
+            "description": "Non-destructively install the curated 4-persona Commissioned Studio Roster (Mika, Ren, Sora, Nagi) while preserving any evolved revisions on existing personas.",
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
+        json!({
+            "name": "swarm_batch_execute",
+            "category": "Shards & Quotas",
+            "scope": "write",
+            "description": "Execute a multi-step autonomous swarm action batch with per-step shard routing, soft-quota telemetry, and optional stop_on_error control.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["actions"],
+                "properties": {
+                    "stop_on_error": { "type": "boolean", "description": "Halt remaining batch steps if a step fails or enters cooldown advisory" },
+                    "actions": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["tool_name"],
+                            "properties": {
+                                "tool_name": { "type": "string" },
+                                "arguments": { "type": "object" },
+                                "idempotency_key": { "type": "string" }
+                            }
+                        }
+                    }
                 }
             }
         }),
@@ -782,6 +843,18 @@ pub async fn handle_mcp_rpc(
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
 
+    let mut shard_hdr = auth
+        .as_ref()
+        .and_then(|u| u.shard_id)
+        .unwrap_or(0)
+        .to_string();
+    let mut pool_hdr = auth
+        .as_ref()
+        .and_then(|u| u.pool_tier.clone())
+        .unwrap_or_else(|| "central".to_string());
+    let mut mode_hdr = "smooth".to_string();
+    let mut pacing_hdr = "0".to_string();
+
     let outcome: Result<Value, AppError> = match req.method.as_str() {
         "initialize" => Ok(json!({
             "protocolVersion": "2024-11-05",
@@ -845,21 +918,25 @@ pub async fn handle_mcp_rpc(
             }
             match execute_mcp_tool(&state, auth.as_ref(), tool_name, &arguments) {
                 Ok(val) => {
-                    let mode_hdr = val
-                        .get("_quota_governance")
-                        .and_then(|q| q.get("throttle_mode"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("smooth");
-                    let pacing_ms_val = val
-                        .get("_quota_governance")
-                        .and_then(|q| q.get("pacing_delay_ms"))
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(0);
-                    if mode_hdr == "soft_paced" && pacing_ms_val > 0 {
-                        tokio::time::sleep(std::time::Duration::from_millis(
-                            (pacing_ms_val as u64).min(250),
-                        ))
-                        .await;
+                    if let Some(gov) = val.get("_quota_governance") {
+                        if let Some(sid) = gov.get("shard_id").and_then(|v| v.as_i64()) {
+                            shard_hdr = sid.to_string();
+                        }
+                        if let Some(pt) = gov.get("pool_tier").and_then(|v| v.as_str()) {
+                            pool_hdr = pt.to_string();
+                        }
+                        if let Some(tm) = gov.get("throttle_mode").and_then(|v| v.as_str()) {
+                            mode_hdr = tm.to_string();
+                        }
+                        if let Some(pm) = gov.get("pacing_delay_ms").and_then(|v| v.as_i64()) {
+                            pacing_hdr = pm.to_string();
+                            if mode_hdr == "soft_paced" && pm > 0 {
+                                tokio::time::sleep(std::time::Duration::from_millis(
+                                    (pm as u64).min(250),
+                                ))
+                                .await;
+                            }
+                        }
                     }
                     Ok(json!({
                         "content": [{
@@ -871,6 +948,12 @@ pub async fn handle_mcp_rpc(
                     }))
                 }
                 Err(err) => {
+                    if let AppError::QuotaCooldownAdvisory(_, ref dec) = err {
+                        shard_hdr = dec.shard_id.to_string();
+                        pool_hdr = dec.pool_tier.clone();
+                        mode_hdr = dec.throttle_mode.clone();
+                        pacing_hdr = dec.retry_after_ms.to_string();
+                    }
                     let msg = match &err {
                         AppError::BadRequest(m)
                         | AppError::Unauthorized(m)
@@ -900,9 +983,17 @@ pub async fn handle_mcp_rpc(
         ))),
     };
 
+    let resp_headers = [
+        ("x-heav3ns-shard", shard_hdr),
+        ("x-heav3ns-pool", pool_hdr),
+        ("x-ratelimit-throttle-mode", mode_hdr),
+        ("x-ratelimit-pacing-ms", pacing_hdr),
+    ];
+
     match outcome {
         Ok(result) => (
             StatusCode::OK,
+            resp_headers,
             Json(json!({
                 "jsonrpc": "2.0",
                 "id": rpc_id,
@@ -922,6 +1013,7 @@ pub async fn handle_mcp_rpc(
             };
             (
                 StatusCode::OK,
+                resp_headers,
                 Json(json!({
                     "jsonrpc": "2.0",
                     "id": rpc_id,
@@ -1071,20 +1163,31 @@ fn record_audit(
     );
 }
 
-fn provision_agent_token_internal(
-    conn: &rusqlite::Connection,
+struct ProvisionAgentTokenSpec<'a> {
     user_id: i64,
-    agent_name: &str,
-    scopes: &[String],
+    agent_name: &'a str,
+    scopes: &'a [String],
     max_tx: f64,
     daily_lim: f64,
-) -> Result<(i64, String), AppError> {
+    pool_tier: Option<&'a str>,
+    daily_action_quota: Option<i64>,
+}
+
+fn provision_agent_token_internal(
+    conn: &rusqlite::Connection,
+    spec: &ProvisionAgentTokenSpec<'_>,
+) -> Result<(i64, String, i64, String, i64), AppError> {
+    let user_id = spec.user_id;
     let raw_secret = format!("hp_mcp_{}_{}", user_id, Uuid::new_v4().simple());
     let prefix = format!("{}...", &raw_secret[..14.min(raw_secret.len())]);
     let token_hash = hash_agent_token(&raw_secret);
-    let scopes_json = serde_json::to_string(scopes).unwrap_or_else(|_| "[]".into());
-    let shard_id = crate::sharding::compute_user_shard(user_id, &prefix);
-    let policy = crate::sharding::get_pool_tier_policy("central");
+    let scopes_json = serde_json::to_string(spec.scopes).unwrap_or_else(|_| "[]".into());
+    let shard_id = crate::sharding::compute_user_shard(user_id, &raw_secret);
+    let policy = crate::sharding::get_pool_tier_policy(spec.pool_tier.unwrap_or("central"));
+    let action_quota = spec
+        .daily_action_quota
+        .filter(|&q| q >= 20)
+        .unwrap_or(policy.daily_action_quota);
 
     conn.execute(
         "INSERT INTO agent_tokens
@@ -1093,15 +1196,15 @@ fn provision_agent_token_internal(
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1)",
         params![
             user_id,
-            agent_name,
+            spec.agent_name,
             prefix,
             token_hash,
             scopes_json,
-            max_tx,
-            daily_lim,
+            spec.max_tx,
+            spec.daily_lim,
             policy.tier,
             shard_id,
-            policy.daily_action_quota,
+            action_quota,
             policy.burst_capacity,
             policy.refill_rate_per_sec
         ],
@@ -1120,12 +1223,12 @@ fn provision_agent_token_internal(
             policy.tier,
             policy.burst_capacity,
             policy.refill_rate_per_sec,
-            policy.daily_action_quota,
+            action_quota,
             today_str,
             now_ms
         ],
     );
-    Ok((tid, raw_secret))
+    Ok((tid, raw_secret, shard_id, policy.tier, action_quota))
 }
 
 pub fn execute_mcp_tool(
@@ -1139,15 +1242,28 @@ pub fn execute_mcp_tool(
         .and_then(|v| v.as_str())
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
+    let req_hash = crate::sharding::compute_request_hash(tool_name, Some(args));
 
-    let decision = {
+    let (decision, prev_max_audit_id) = {
         let conn = state.lock_db();
-        crate::sharding::evaluate_and_consume_quota(
+        let prev_max: i64 = if let Some(user) = auth {
+            conn.query_row(
+                "SELECT COALESCE(MAX(id), 0) FROM agent_audit_logs WHERE user_id = ?1",
+                params![user.user_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0)
+        } else {
+            0
+        };
+        let dec = crate::sharding::evaluate_and_consume_quota_with_hash(
             &conn,
             auth,
             tool_name,
             idem_key.as_deref(),
-        )?
+            Some(&req_hash),
+        )?;
+        (dec, prev_max)
     };
 
     if decision.idempotent_replay {
@@ -1191,7 +1307,6 @@ pub fn execute_mcp_tool(
         }
     };
 
-
     if let Some(obj) = raw_res.as_object_mut() {
         let gov = serde_json::to_value(&decision).unwrap_or_else(|_| json!({}));
         obj.insert("_quota_governance".to_string(), gov.clone());
@@ -1200,17 +1315,25 @@ pub fn execute_mcp_tool(
 
     if let (Some(user), Some(ref key)) = (auth, &idem_key) {
         let conn = state.lock_db();
-        crate::sharding::save_idempotent_action(&conn, user.user_id, key, tool_name, &raw_res);
+        crate::sharding::save_idempotent_action_with_hash(
+            &conn,
+            user.user_id,
+            key,
+            tool_name,
+            Some(&req_hash),
+            &raw_res,
+        );
     }
 
-    // Update latest audit log entry for this agent token with soft pacing & shard telemetry
+    // Update newly inserted audit log entry (or insert one if tool did not call record_audit)
+    // without ever clobbering a prior tool's audit log row.
     if let Some(user) = auth {
-        if let Some(tid) = user.agent_token_id {
-            let conn = state.lock_db();
-            let _ = conn.execute(
+        let conn = state.lock_db();
+        let updated_rows = conn
+            .execute(
                 "UPDATE agent_audit_logs
                  SET shard_id = ?1, pool_tier = ?2, action_units = ?3, throttle_mode = ?4, pacing_delay_ms = ?5, idempotency_key = ?6
-                 WHERE id = (SELECT MAX(id) FROM agent_audit_logs WHERE agent_token_id = ?7)",
+                 WHERE id > ?7 AND user_id = ?8 AND tool_name = ?9",
                 params![
                     decision.shard_id,
                     decision.pool_tier,
@@ -1218,7 +1341,29 @@ pub fn execute_mcp_tool(
                     decision.throttle_mode,
                     decision.pacing_delay_ms,
                     idem_key,
-                    tid
+                    prev_max_audit_id,
+                    user.user_id,
+                    tool_name
+                ],
+            )
+            .unwrap_or(0);
+
+        if updated_rows == 0 && user.agent_token_id.is_some() {
+            let _ = conn.execute(
+                "INSERT INTO agent_audit_logs
+                 (user_id, agent_token_id, tool_name, resource_type, resource_id, status, amount_spent,
+                  action_units, shard_id, pool_tier, throttle_mode, pacing_delay_ms, idempotency_key, details)
+                 VALUES (?1, ?2, ?3, 'mcp_tool', NULL, 'success', 0.0, ?4, ?5, ?6, ?7, ?8, ?9, '{}')",
+                params![
+                    user.user_id,
+                    user.agent_token_id,
+                    tool_name,
+                    decision.action_units,
+                    decision.shard_id,
+                    decision.pool_tier,
+                    decision.throttle_mode,
+                    decision.pacing_delay_ms,
+                    idem_key,
                 ],
             );
         }
@@ -1378,8 +1523,17 @@ fn execute_mcp_tool_inner(
                     "messages".into(),
                     "wallet".into(),
                 ];
-                let (tid, secret) = provision_agent_token_internal(
-                    &conn, user_id, agent_name, &scopes, max_tx, daily_lim,
+                let (tid, secret, _, _, _) = provision_agent_token_internal(
+                    &conn,
+                    &ProvisionAgentTokenSpec {
+                        user_id,
+                        agent_name,
+                        scopes: &scopes,
+                        max_tx,
+                        daily_lim,
+                        pool_tier: args.get("pool_tier").and_then(|v| v.as_str()),
+                        daily_action_quota: args.get("daily_action_quota").and_then(|v| v.as_i64()),
+                    },
                 )?;
                 let _ = conn.execute(
                     "INSERT INTO agent_audit_logs (user_id, agent_token_id, tool_name, resource_type, resource_id, status, amount_spent, details)
@@ -1458,8 +1612,17 @@ fn execute_mcp_tool_inner(
                     "messages".into(),
                     "wallet".into(),
                 ];
-                let (_, secret) = provision_agent_token_internal(
-                    &conn, user_id, agent_name, &scopes, max_tx, daily_lim,
+                let (_, secret, _, _, _) = provision_agent_token_internal(
+                    &conn,
+                    &ProvisionAgentTokenSpec {
+                        user_id,
+                        agent_name,
+                        scopes: &scopes,
+                        max_tx,
+                        daily_lim,
+                        pool_tier: args.get("pool_tier").and_then(|v| v.as_str()),
+                        daily_action_quota: args.get("daily_action_quota").and_then(|v| v.as_i64()),
+                    },
                 )?;
                 agent_token_secret = Some(secret);
             }
@@ -1550,9 +1713,22 @@ fn execute_mcp_tool_inner(
                     .unwrap_or(200.0)
                     .max(0.0),
             );
+            let pool_tier = args.get("pool_tier").and_then(|v| v.as_str());
+            let daily_action_quota = args.get("daily_action_quota").and_then(|v| v.as_i64());
             let conn = state.lock_db();
-            let (tid, secret) =
-                provision_agent_token_internal(&conn, user.user_id, name, &scopes, max_tx, daily_lim)?;
+            let (tid, secret, shard_id, assigned_pool_tier, assigned_quota) =
+                provision_agent_token_internal(
+                    &conn,
+                    &ProvisionAgentTokenSpec {
+                        user_id: user.user_id,
+                        agent_name: name,
+                        scopes: &scopes,
+                        max_tx,
+                        daily_lim,
+                        pool_tier,
+                        daily_action_quota,
+                    },
+                )?;
             record_audit(
                 &conn,
                 user,
@@ -1560,12 +1736,21 @@ fn execute_mcp_tool_inner(
                 "agent_token",
                 Some(tid.to_string()),
                 0.0,
-                json!({ "name": name, "scopes": scopes }),
+                json!({
+                    "name": name,
+                    "scopes": scopes,
+                    "shard_id": shard_id,
+                    "pool_tier": assigned_pool_tier,
+                    "daily_action_quota": assigned_quota
+                }),
             );
             Ok(json!({
                 "token_id": tid,
                 "agent_token": secret,
                 "scopes": scopes,
+                "shard_id": shard_id,
+                "pool_tier": assigned_pool_tier,
+                "daily_action_quota": assigned_quota,
                 "max_spend_per_tx": max_tx,
                 "daily_spend_limit": daily_lim
             }))
@@ -3199,7 +3384,7 @@ fn execute_mcp_tool_inner(
             }))
         }
 
-        "persona_get" => {
+        "persona_get" | "persona_list" => {
             let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
             user.require_scope("read")?;
             let conn = state.lock_db();
@@ -3243,33 +3428,55 @@ fn execute_mcp_tool_inner(
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            let focus = args
-                .get("focus")
-                .and_then(|v| v.as_str())
-                .unwrap_or("creator")
-                .to_string();
+            let focus = crate::sharding::validate_persona_focus(
+                args.get("focus")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("creator"),
+            )?;
             let policy = crate::sharding::get_pool_tier_policy(
                 args.get("pool_tier")
                     .and_then(|v| v.as_str())
                     .unwrap_or("central"),
             );
-            let autonomy_mode = args
-                .get("autonomy_mode")
-                .and_then(|v| v.as_str())
-                .unwrap_or("autonomous_co_pilot")
-                .to_string();
-            let engagement_cadence = args
-                .get("engagement_cadence")
-                .and_then(|v| v.as_str())
-                .unwrap_or("balanced")
-                .to_string();
+            let autonomy_mode = crate::sharding::validate_autonomy_mode(
+                args.get("autonomy_mode")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("autonomous_co_pilot"),
+            )?;
+            let engagement_cadence = crate::sharding::validate_engagement_cadence(
+                args.get("engagement_cadence")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("balanced"),
+            )?;
             let shard_id = crate::sharding::compute_virtual_shard(&format!("persona:{}:{handle}", user.user_id));
+
+            let raw_principles: Option<Vec<String>> = args
+                .get("principles")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|x| x.as_str().map(String::from)).collect());
+            let raw_interests: Option<Vec<String>> = args
+                .get("interests")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|x| x.as_str().map(String::from)).collect());
+            let raw_methods: Option<Vec<String>> = args
+                .get("methods")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|x| x.as_str().map(String::from)).collect());
 
             let conn = state.lock_db();
             let existing = crate::handlers::get_persona_by_id_or_handle(&conn, &handle).ok();
             let pid = if let Some(ex) = existing {
                 if ex.user_id != user.user_id && user.role_id != 1 {
                     return Err(AppError::Forbidden("Persona handle owned by another user.".into()));
+                }
+                if let Some(ref p) = raw_principles {
+                    crate::sharding::validate_practice_labels(p, "principles")?;
+                }
+                if let Some(ref i) = raw_interests {
+                    crate::sharding::validate_practice_labels(i, "interests")?;
+                }
+                if let Some(ref m) = raw_methods {
+                    crate::sharding::validate_practice_labels(m, "methods")?;
                 }
                 conn.execute(
                     "UPDATE agent_personas
@@ -3289,21 +3496,18 @@ fn execute_mcp_tool_inner(
                 ex.id
             } else {
                 let new_id = format!("persona-{}", &Uuid::new_v4().simple().to_string()[..12]);
-                let principles: Vec<String> = args
-                    .get("principles")
-                    .and_then(|v| v.as_array())
-                    .map(|arr| arr.iter().filter_map(|x| x.as_str().map(String::from)).collect())
-                    .unwrap_or_else(|| vec!["Maintain authentic creator voice.".into()]);
-                let interests: Vec<String> = args
-                    .get("interests")
-                    .and_then(|v| v.as_array())
-                    .map(|arr| arr.iter().filter_map(|x| x.as_str().map(String::from)).collect())
-                    .unwrap_or_else(|| vec!["Behind-the-scenes studio craft".into()]);
-                let methods: Vec<String> = args
-                    .get("methods")
-                    .and_then(|v| v.as_array())
-                    .map(|arr| arr.iter().filter_map(|x| x.as_str().map(String::from)).collect())
-                    .unwrap_or_else(|| vec!["Pair PPV drops with free community polls.".into()]);
+                let principles = match raw_principles {
+                    Some(ref p) => crate::sharding::validate_practice_labels(p, "principles")?,
+                    None => vec!["Maintain authentic creator voice.".into()],
+                };
+                let interests = match raw_interests {
+                    Some(ref i) => crate::sharding::validate_practice_labels(i, "interests")?,
+                    None => vec!["Behind-the-scenes studio craft".into()],
+                };
+                let methods = match raw_methods {
+                    Some(ref m) => crate::sharding::validate_practice_labels(m, "methods")?,
+                    None => vec!["Pair PPV drops with free community polls.".into()],
+                };
                 let direction = args
                     .get("direction")
                     .and_then(|v| v.as_str())
@@ -3377,7 +3581,55 @@ fn execute_mcp_tool_inner(
             if persona.user_id != user.user_id && user.role_id != 1 {
                 return Err(AppError::Forbidden("Forbidden".into()));
             }
+            let prev = persona.practices.last().cloned();
+            let focus = match args.get("focus").and_then(|v| v.as_str()) {
+                Some(f) => crate::sharding::validate_persona_focus(f)?,
+                None => prev
+                    .as_ref()
+                    .map(|p| p.focus.clone())
+                    .unwrap_or_else(|| persona.focus.clone()),
+            };
+            let principles: Vec<String> = match args.get("principles").and_then(|v| v.as_array()) {
+                Some(a) => {
+                    let raw: Vec<String> = a.iter().filter_map(|x| x.as_str().map(String::from)).collect();
+                    crate::sharding::validate_practice_labels(&raw, "principles")?
+                }
+                None => prev.as_ref().map(|p| p.principles.clone()).unwrap_or_default(),
+            };
+            let interests: Vec<String> = match args.get("interests").and_then(|v| v.as_array()) {
+                Some(a) => {
+                    let raw: Vec<String> = a.iter().filter_map(|x| x.as_str().map(String::from)).collect();
+                    crate::sharding::validate_practice_labels(&raw, "interests")?
+                }
+                None => prev.as_ref().map(|p| p.interests.clone()).unwrap_or_default(),
+            };
+            let methods: Vec<String> = match args.get("methods").and_then(|v| v.as_array()) {
+                Some(a) => {
+                    let raw: Vec<String> = a.iter().filter_map(|x| x.as_str().map(String::from)).collect();
+                    crate::sharding::validate_practice_labels(&raw, "methods")?
+                }
+                None => prev.as_ref().map(|p| p.methods.clone()).unwrap_or_default(),
+            };
+
             if let Some(exp) = args.get("expected_revision").and_then(|v| v.as_i64()) {
+                // GALXAI exact replay idempotency: if expected_revision == current_revision - 1
+                // and the latest practice content matches, return idempotent replay.
+                if exp == persona.current_revision - 1 {
+                    if let Some(ref latest) = prev {
+                        if latest.focus == focus
+                            && latest.principles == principles
+                            && latest.interests == interests
+                            && latest.methods == methods
+                            && latest.direction == direction
+                        {
+                            return Ok(json!({
+                                "practice": latest,
+                                "persona": persona,
+                                "idempotent_replay": true
+                            }));
+                        }
+                    }
+                }
                 if exp != persona.current_revision {
                     return Err(AppError::Conflict(format!(
                         "Expected revision {exp}, found {}",
@@ -3386,32 +3638,6 @@ fn execute_mcp_tool_inner(
                 }
             }
             let next_rev = persona.current_revision + 1;
-            let prev = persona.practices.last().cloned();
-            let focus = args
-                .get("focus")
-                .and_then(|v| v.as_str())
-                .map(String::from)
-                .or_else(|| prev.as_ref().map(|p| p.focus.clone()))
-                .unwrap_or_else(|| persona.focus.clone());
-            let principles = args
-                .get("principles")
-                .and_then(|v| v.as_array())
-                .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
-                .or_else(|| prev.as_ref().map(|p| p.principles.clone()))
-                .unwrap_or_default();
-            let interests = args
-                .get("interests")
-                .and_then(|v| v.as_array())
-                .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
-                .or_else(|| prev.as_ref().map(|p| p.interests.clone()))
-                .unwrap_or_default();
-            let methods = args
-                .get("methods")
-                .and_then(|v| v.as_array())
-                .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
-                .or_else(|| prev.as_ref().map(|p| p.methods.clone()))
-                .unwrap_or_default();
-
             let rev_obj = crate::sharding::PersonaPracticeRevision {
                 revision: next_rev,
                 focus: focus.clone(),
@@ -3456,9 +3682,30 @@ fn execute_mcp_tool_inner(
                 .unwrap_or("Engage with subscribers and publish high-craft studio updates")
                 .trim();
             let audience = args.get("target_audience").and_then(|v| v.as_str());
+            let raw_chars: Option<Vec<crate::sharding::PersonaCharacterReference>> =
+                match args.get("characters") {
+                    Some(v) if !v.is_null() => Some(serde_json::from_value(v.clone()).map_err(
+                        |e| AppError::Unprocessable(format!("Invalid characters array: {e}")),
+                    )?),
+                    _ => None,
+                };
             let conn = state.lock_db();
             let persona = crate::handlers::get_persona_by_id_or_handle(&conn, pid)?;
-            let brief = crate::sharding::compile_persona_brief(&persona, intent, audience);
+            let active_focus = persona
+                .practices
+                .last()
+                .map(|p| p.focus.as_str())
+                .unwrap_or(&persona.focus);
+            let characters = crate::sharding::validate_character_references(
+                raw_chars.as_deref(),
+                active_focus,
+            )?;
+            let brief = crate::sharding::compile_persona_brief_with_characters(
+                &persona,
+                intent,
+                audience,
+                Some(&characters),
+            );
             record_audit(
                 &conn,
                 user,
@@ -3466,7 +3713,7 @@ fn execute_mcp_tool_inner(
                 "persona",
                 Some(persona.id),
                 0.0,
-                json!({ "intent": intent }),
+                json!({ "intent": intent, "characters_count": characters.len() }),
             );
             Ok(json!({ "brief": brief }))
         }
@@ -3492,6 +3739,57 @@ fn execute_mcp_tool_inner(
             if description.is_empty() {
                 return Err(AppError::Unprocessable("description required".into()));
             }
+            let raw_chars: Option<Vec<crate::sharding::PersonaCharacterReference>> =
+                match args.get("characters") {
+                    Some(v) if !v.is_null() => Some(serde_json::from_value(v.clone()).map_err(
+                        |e| AppError::Unprocessable(format!("Invalid characters array: {e}")),
+                    )?),
+                    _ => None,
+                };
+
+            let mut work_ids: Vec<String> = Vec::new();
+            if let Some(arr) = args.get("work_ids").and_then(|v| v.as_array()) {
+                for x in arr {
+                    if let Some(s) = x.as_str() {
+                        let trimmed = s.trim();
+                        if !trimmed.is_empty() {
+                            let valid = crate::sharding::require_valid_record_id(trimmed, "work_id")?;
+                            work_ids.push(valid);
+                        }
+                    }
+                }
+            }
+            let target_res_id = match args
+                .get("target_resource_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+            {
+                Some(tr) => Some(crate::sharding::require_valid_record_id(
+                    tr,
+                    "target_resource_id",
+                )?),
+                None => None,
+            };
+            if let Some(ref target_id) = target_res_id {
+                if !work_ids.contains(target_id) {
+                    work_ids.push(target_id.clone());
+                }
+            }
+            if work_ids.len() > 64 {
+                return Err(AppError::Unprocessable(
+                    "At most 64 work_ids may be linked to a single activity.".into(),
+                ));
+            }
+            let mut seen_works = std::collections::HashSet::new();
+            for wid in &work_ids {
+                if !seen_works.insert(wid.clone()) {
+                    return Err(AppError::Unprocessable(format!(
+                        "Duplicate work_id '{wid}' in activity payload."
+                    )));
+                }
+            }
+
             let conn = state.lock_db();
             let mut persona = crate::handlers::get_persona_by_id_or_handle(&conn, pid)?;
             if persona.user_id != user.user_id && user.role_id != 1 {
@@ -3507,16 +3805,103 @@ fn execute_mcp_tool_inner(
                     persona.current_revision
                 )));
             }
+            let rev_focus = persona
+                .practices
+                .get((rev - 1) as usize)
+                .map(|p| p.focus.as_str())
+                .unwrap_or(&persona.focus);
+            if rev_focus.eq_ignore_ascii_case("gravure") {
+                if let Some(ref list) = raw_chars {
+                    if list.is_empty() {
+                        return Err(AppError::Unprocessable(
+                            "Gravure activity requires at least one explicitly adult (18+) character reference when characters are specified.".into(),
+                        ));
+                    }
+                }
+            }
+            let characters = crate::sharding::validate_character_references(
+                raw_chars.as_deref(),
+                rev_focus,
+            )?;
+            let characters_opt = if characters.is_empty() {
+                None
+            } else {
+                Some(characters.clone())
+            };
+
+            let act_id = match args
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+            {
+                Some(custom_id) => crate::sharding::require_valid_record_id(custom_id, "activity id")?,
+                None => format!("act-{}", &Uuid::new_v4().simple().to_string()[..12]),
+            };
+
+            let compiled_brief = crate::sharding::compile_persona_brief_with_characters(
+                &persona,
+                description,
+                None,
+                Some(&characters),
+            );
+            let brief_text = args
+                .get("brief")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .or_else(|| {
+                    compiled_brief
+                        .get("instructions")
+                        .and_then(|v| v.as_str())
+                        .map(String::from)
+                });
+
+            // Check exact replay idempotency or conflicting activity ID across all personas
+            let all_personas = crate::handlers::list_user_agent_personas(&conn, None)?;
+            for p in &all_personas {
+                if let Some(existing_act) = p.activities.iter().find(|a| a.id == act_id) {
+                    if p.id == persona.id
+                        && existing_act.practice_revision == rev
+                        && existing_act.action_type == action_type
+                        && existing_act.target_resource_id == target_res_id
+                        && existing_act.description == description
+                        && existing_act.work_ids == work_ids
+                        && existing_act.characters == characters_opt
+                        && existing_act.brief == brief_text
+                    {
+                        return Ok(json!({
+                            "activity": existing_act,
+                            "persona": persona,
+                            "idempotent_replay": true
+                        }));
+                    }
+                    return Err(AppError::Conflict(format!(
+                        "Activity '{act_id}' already exists with different content."
+                    )));
+                }
+                if p.id != persona.id {
+                    for wid in &work_ids {
+                        if p.activities.iter().any(|a| a.work_ids.contains(wid)) {
+                            return Err(AppError::Conflict(format!(
+                                "Work '{wid}' is already attributed to persona @{}.",
+                                p.handle
+                            )));
+                        }
+                    }
+                }
+            }
+
             let now_iso = chrono::Utc::now().to_rfc3339();
             let act = crate::sharding::PersonaActivityRecord {
-                id: format!("act-{}", &Uuid::new_v4().simple().to_string()[..12]),
+                id: act_id,
                 persona_id: persona.id.clone(),
                 practice_revision: rev,
                 action_type: action_type.to_string(),
-                target_resource_id: args
-                    .get("target_resource_id")
-                    .and_then(|v| v.as_str())
-                    .map(String::from),
+                target_resource_id: target_res_id,
+                work_ids,
+                characters: characters_opt,
+                brief: brief_text,
                 description: description.to_string(),
                 occurred_at: now_iso.clone(),
                 recorded_at: now_iso,
@@ -3540,6 +3925,176 @@ fn execute_mcp_tool_inner(
             drop(conn);
             state.sync_persona_to_postgres(&updated);
             Ok(json!({ "activity": act, "persona": updated }))
+        }
+
+        "persona_bootstrap_roster" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            user.require_scope("write")?;
+            let pool_override = args.get("pool_tier_override").and_then(|v| v.as_str());
+            let res = crate::handlers::bootstrap_commissioned_roster_for_user(
+                state,
+                user.user_id,
+                &user.username,
+                pool_override,
+            )?;
+            {
+                let conn = state.lock_db();
+                record_audit(
+                    &conn,
+                    user,
+                    "persona_bootstrap_roster",
+                    "persona_roster",
+                    None,
+                    0.0,
+                    json!({
+                        "installed_count": res["installed_count"],
+                        "existing_before": res["existing_before"]
+                    }),
+                );
+            }
+            Ok(res)
+        }
+
+        "swarm_batch_execute" => {
+            let user = auth.ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+            let actions = args
+                .get("actions")
+                .or_else(|| args.get("steps"))
+                .and_then(|v| v.as_array())
+                .ok_or_else(|| AppError::Unprocessable("actions array is required.".into()))?;
+            if actions.is_empty() || actions.len() > 25 {
+                return Err(AppError::Unprocessable(
+                    "actions must contain between 1 and 25 steps.".into(),
+                ));
+            }
+            let stop_on_error = args
+                .get("stop_on_error")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+
+            let mut results = Vec::with_capacity(actions.len());
+            let mut succeeded = 0usize;
+            let mut failed = 0usize;
+
+            for (idx, step) in actions.iter().enumerate() {
+                let step_tool = step
+                    .get("tool_name")
+                    .or_else(|| step.get("tool"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim();
+                if step_tool.is_empty() || step_tool == "swarm_batch_execute" {
+                    failed += 1;
+                    results.push(json!({
+                        "index": idx,
+                        "step_index": idx,
+                        "tool": step_tool,
+                        "tool_name": step_tool,
+                        "success": false,
+                        "error": "Invalid or recursive tool_name in swarm_batch_execute"
+                    }));
+                    if stop_on_error {
+                        break;
+                    }
+                    continue;
+                }
+                let mut step_args = step
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
+                if !step_args.is_object() {
+                    step_args = json!({});
+                }
+                if let Some(idem) = step
+                    .get("idempotency_key")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.trim().is_empty())
+                {
+                    if let Some(obj) = step_args.as_object_mut() {
+                        obj.insert("idempotency_key".to_string(), json!(idem.trim()));
+                    }
+                }
+                match execute_mcp_tool(state, Some(user), step_tool, &step_args) {
+                    Ok(res) => {
+                        let throttled = res
+                            .get("throttled")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        let step_gov = res.get("_quota_governance").cloned().unwrap_or(Value::Null);
+                        let step_shard = step_gov.get("shard_id").cloned().unwrap_or(Value::Null);
+                        let step_pool = step_gov.get("pool_tier").cloned().unwrap_or(Value::Null);
+                        let step_mode = step_gov.get("throttle_mode").cloned().unwrap_or(Value::Null);
+                        let step_pacing = step_gov.get("pacing_delay_ms").cloned().unwrap_or(json!(0));
+                        if throttled {
+                            failed += 1;
+                        } else {
+                            succeeded += 1;
+                        }
+                        results.push(json!({
+                            "index": idx,
+                            "step_index": idx,
+                            "tool": step_tool,
+                            "tool_name": step_tool,
+                            "success": !throttled,
+                            "throttled": throttled,
+                            "shard_id": step_shard,
+                            "pool_tier": step_pool,
+                            "throttle_mode": step_mode,
+                            "pacing_delay_ms": step_pacing,
+                            "_quota_governance": step_gov,
+                            "result": res
+                        }));
+                        if throttled && stop_on_error {
+                            break;
+                        }
+                    }
+                    Err(err) => {
+                        failed += 1;
+                        let msg = match &err {
+                            AppError::BadRequest(m)
+                            | AppError::Unauthorized(m)
+                            | AppError::Forbidden(m)
+                            | AppError::NotFound(m)
+                            | AppError::Conflict(m)
+                            | AppError::Unprocessable(m)
+                            | AppError::QuotaCooldownAdvisory(m, _)
+                            | AppError::Internal(m) => m.clone(),
+                        };
+                        results.push(json!({
+                            "index": idx,
+                            "step_index": idx,
+                            "tool": step_tool,
+                            "tool_name": step_tool,
+                            "success": false,
+                            "error": msg
+                        }));
+                        if stop_on_error {
+                            break;
+                        }
+                    }
+                }
+            }
+
+            let telemetry = {
+                let conn = state.lock_db();
+                crate::sharding::build_shard_pool_telemetry(state, &conn)
+            };
+            Ok(json!({
+                "success": failed == 0,
+                "total_steps": actions.len(),
+                "batch_size": actions.len(),
+                "executed": results.len(),
+                "succeeded": succeeded,
+                "succeeded_count": succeeded,
+                "failed": failed,
+                "failed_count": failed,
+                "results": results,
+                "telemetry_snapshot": {
+                    "shards": telemetry["shards"],
+                    "virtual_shards_count": telemetry["virtual_shards_count"],
+                    "cluster_summary": telemetry["cluster_summary"]
+                }
+            }))
         }
 
         other => Err(AppError::NotFound(format!("Unknown MCP tool: {other}"))),

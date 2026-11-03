@@ -140,6 +140,10 @@ pub fn build_app(state: AppState) -> Router {
                 .post(handlers::governance::upsert_agent_persona),
         )
         .route(
+            "/agent/personas/roster",
+            post(handlers::governance::bootstrap_persona_roster_handler),
+        )
+        .route(
             "/agent/personas/:persona_id/practice",
             post(handlers::governance::update_persona_practice),
         )
@@ -150,6 +154,10 @@ pub fn build_app(state: AppState) -> Router {
         .route(
             "/agent/personas/:persona_id/activities",
             post(handlers::governance::record_persona_activity),
+        )
+        .route(
+            "/agent/swarm/batch",
+            post(handlers::governance::execute_swarm_batch_handler),
         )
         .route("/mcp", post(mcp::handle_mcp_rpc).get(mcp::get_mcp_manifest))
         .route("/mcp/manifest", get(mcp::get_mcp_manifest))
@@ -279,6 +287,7 @@ async fn main() {
         postgres_url: active_pg_url,
         postgres_pool_size,
         postgres_pool: Arc::new(Mutex::new(pg_pool)),
+        postgres_last_failure_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
     };
 
     let app = build_app(state);
@@ -309,6 +318,7 @@ mod tests {
             postgres_url: None,
             postgres_pool_size: 4,
             postgres_pool: Arc::new(Mutex::new(Vec::new())),
+            postgres_last_failure_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
         };
         build_app(state)
     }
@@ -3062,6 +3072,7 @@ mod tests {
                 postgres_url: Some(pg_url),
                 postgres_pool_size: 4,
                 postgres_pool: Arc::new(Mutex::new(pool)),
+                postgres_last_failure_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             };
             assert_eq!(state.db_engine_label(), "postgresql_pooled_sharded");
 
@@ -3128,5 +3139,1169 @@ mod tests {
             );
         }
     }
+
+    #[tokio::test]
+    async fn test_galxai_sharding_idempotency_conflict_roster_and_swarm_batch() {
+        let app = setup_test_app();
+
+        // 1. Login as Aria (User 1) and mint a studio-tier agent token via MCP agent_token_create
+        let login_res = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/auth/login")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "email": "aria@justfans.local",
+                                "password": "password123"
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        let aria_jwt = login_res["token"].as_str().unwrap().to_string();
+
+        let mint_mcp_res = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/mcp/tools/agent_token_create")
+                        .header("authorization", format!("Bearer {aria_jwt}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "name": "Aria Studio Swarm Token",
+                                "pool_tier": "studio",
+                                "daily_action_quota": 10000,
+                                "scopes": ["read", "write", "engage", "monetize", "messages", "wallet", "admin"]
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(mint_mcp_res["result"]["pool_tier"], "studio");
+        assert_eq!(mint_mcp_res["result"]["daily_action_quota"], 10000);
+        let agent_token = mint_mcp_res["result"]["agent_token"].as_str().unwrap().to_string();
+
+        // 2. Idempotency key conflict detection:
+        // First call with idempotency_key = "idem-strict-hash-1" succeeds
+        let post1_res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/mcp/tools/post_create_or_update")
+                    .header("x-agent-token", &agent_token)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "text": "Original idempotent studio drop #1",
+                            "price": 0.0,
+                            "idempotency_key": "idem-strict-hash-1"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(post1_res.status(), StatusCode::OK);
+        let post1_json = body_json(post1_res).await;
+        let created_post_id = post1_json["result"]["post"]["id"].as_i64().unwrap();
+
+        // Exact same payload & tool replays cleanly with idempotent_replay = true
+        let replay_res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/mcp/tools/post_create_or_update")
+                    .header("x-agent-token", &agent_token)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "text": "Original idempotent studio drop #1",
+                            "price": 0.0,
+                            "idempotency_key": "idem-strict-hash-1"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(replay_res.status(), StatusCode::OK);
+        let replay_json = body_json(replay_res).await;
+        assert_eq!(
+            replay_json["result"]["_quota_governance"]["idempotent_replay"],
+            true
+        );
+        assert_eq!(
+            replay_json["result"]["post"]["id"].as_i64().unwrap(),
+            created_post_id
+        );
+
+        // Reusing the SAME idempotency_key with a DIFFERENT payload must return 409 Conflict!
+        let conflict_payload_res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/mcp/tools/post_create_or_update")
+                    .header("x-agent-token", &agent_token)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "text": "Tampered payload using same idempotency key!",
+                            "price": 15.0,
+                            "idempotency_key": "idem-strict-hash-1"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(conflict_payload_res.status(), StatusCode::CONFLICT);
+
+        // Reusing the SAME idempotency_key on a DIFFERENT tool must also return 409 Conflict!
+        let conflict_tool_res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/mcp/tools/post_react")
+                    .header("x-agent-token", &agent_token)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "post_id": created_post_id,
+                            "idempotency_key": "idem-strict-hash-1"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(conflict_tool_res.status(), StatusCode::CONFLICT);
+
+        // 3. Commissioned Persona Roster Bootstrap (POST /api/agent/personas/roster)
+        // Installs Mika, Ren, Sora, and Nagi for Aria
+        let roster_res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/agent/personas/roster")
+                    .header("x-agent-token", &agent_token)
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::json!({}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(roster_res.status(), StatusCode::OK);
+        let roster_json = body_json(roster_res).await;
+        assert_eq!(roster_json["success"], true);
+        assert_eq!(roster_json["installed_count"], 4);
+
+        // Evolve Mika's practice revision to #2
+        let mika_handle = roster_json["changes"][0]["handle"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let ren_handle = roster_json["changes"][3]["handle"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let prac_res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/agent/personas/{mika_handle}/practice"))
+                    .header("x-agent-token", &agent_token)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "expected_revision": 1,
+                            "focus": "doujin",
+                            "principles": ["Bold ink contrast", "Sequential cliffhangers"],
+                            "interests": ["Cyberpunk rooftops", "Halftone textures"],
+                            "methods": ["Release 4-panel teaser before PPV chapter"],
+                            "direction": "Focus on monochrome cyberpunk anthology chapter 2."
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(prac_res.status(), StatusCode::OK);
+        let prac_json = body_json(prac_res).await;
+        assert_eq!(prac_json["persona"]["current_revision"], 2);
+
+        // GALXAI Exact Replay Idempotency on Practice Revision:
+        // Re-submitting the exact same revision update with expected_revision = 1 (current_revision - 1)
+        // must succeed idempotently with idempotent_replay = true!
+        let prac_replay_res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/agent/personas/{mika_handle}/practice"))
+                    .header("x-agent-token", &agent_token)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "expected_revision": 1,
+                            "focus": "doujin",
+                            "principles": ["Bold ink contrast", "Sequential cliffhangers"],
+                            "interests": ["Cyberpunk rooftops", "Halftone textures"],
+                            "methods": ["Release 4-panel teaser before PPV chapter"],
+                            "direction": "Focus on monochrome cyberpunk anthology chapter 2."
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(prac_replay_res.status(), StatusCode::OK);
+        let prac_replay_json = body_json(prac_replay_res).await;
+        assert_eq!(prac_replay_json["idempotent_replay"], true);
+        assert_eq!(prac_replay_json["persona"]["current_revision"], 2);
+
+        // Re-running Commissioned Roster Bootstrap must preserve Mika's evolved revision #2 untouched
+        let roster_rerun = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/agent/personas/roster")
+                        .header("x-agent-token", &agent_token)
+                        .header("content-type", "application/json")
+                        .body(Body::from(serde_json::json!({}).to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(roster_rerun["installed_count"], 0);
+        let mika_after = roster_rerun["personas"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["handle"] == mika_handle)
+            .unwrap();
+        assert_eq!(mika_after["current_revision"], 2);
+
+        // 4. Character reference guardrails & Cross-Persona Work Attribution Conflict (GALXAI StarStore parity)
+        // Gravure persona (Ren) requires explicit adult age (18+) on character references
+        let missing_age_gravure = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/agent/personas/{ren_handle}/brief"))
+                    .header("x-agent-token", &agent_token)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "intent": "Golden hour studio portrait set",
+                            "characters": [
+                                { "name": "Kanon", "origin": "original" }
+                            ]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing_age_gravure.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+        // With explicit adult age (23), Ren's brief compiles cleanly and includes Character Portrayal Guardrails
+        let valid_gravure_brief = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("/api/agent/personas/{ren_handle}/brief"))
+                        .header("x-agent-token", &agent_token)
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "intent": "Golden hour studio portrait set",
+                                "characters": [
+                                    { "name": "Kanon", "origin": "original", "age": 23 }
+                                ]
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(valid_gravure_brief["success"], true);
+        assert!(valid_gravure_brief["brief"]["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("Kanon"));
+
+        // Record activity on Mika attributing work_id "work-post-777"
+        let act_mika = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/agent/personas/{mika_handle}/activities"))
+                    .header("x-agent-token", &agent_token)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "id": "act-mika-drop-777",
+                            "action_type": "post_create_or_update",
+                            "work_ids": ["work-post-777"],
+                            "description": "Published monochrome cyberpunk anthology page."
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(act_mika.status(), StatusCode::CREATED);
+
+        // Replaying the exact same activity ID and content on Mika returns 200 OK with idempotent_replay = true
+        let act_mika_replay = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/agent/personas/{mika_handle}/activities"))
+                    .header("x-agent-token", &agent_token)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "id": "act-mika-drop-777",
+                            "action_type": "post_create_or_update",
+                            "work_ids": ["work-post-777"],
+                            "description": "Published monochrome cyberpunk anthology page."
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(act_mika_replay.status(), StatusCode::OK);
+        let act_mika_replay_json = body_json(act_mika_replay).await;
+        assert_eq!(act_mika_replay_json["idempotent_replay"], true);
+
+        // Attempting to attribute the SAME work_id ("work-post-777") to Ren must fail with 409 Conflict!
+        let act_ren_conflict = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/agent/personas/{ren_handle}/activities"))
+                    .header("x-agent-token", &agent_token)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "id": "act-ren-steal-777",
+                            "action_type": "post_create_or_update",
+                            "work_ids": ["work-post-777"],
+                            "description": "Attempting to claim Mika's work_id"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(act_ren_conflict.status(), StatusCode::CONFLICT);
+
+        // 5. Newly wired REST endpoints (reels, stories, streams, broadcast, settings) enforce quota & record audit logs
+        let reel_rest = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/reels")
+                    .header("x-agent-token", &agent_token)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "caption": "Autonomous studio lighting breakdown reel",
+                            "video_path": "/img/demo-reel.mp4"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(reel_rest.status(), StatusCode::OK);
+
+        let story_rest = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/stories")
+                    .header("x-agent-token", &agent_token)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "caption": "24h autonomous studio WIP story",
+                            "bg_preset": "cyberpunk"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(story_rest.status(), StatusCode::OK);
+
+        let broadcast_rest = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/messenger/broadcast")
+                    .header("x-agent-token", &agent_token)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "message": "Studio swarm broadcast to all followers!",
+                            "target": "followers",
+                            "price": 0.0
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(broadcast_rest.status(), StatusCode::OK);
+
+        // 6. Multi-step Swarm Batch Execution (POST /api/agent/swarm/batch)
+        let batch_res = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/agent/swarm/batch")
+                        .header("x-agent-token", &agent_token)
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "stop_on_error": true,
+                                "actions": [
+                                    {
+                                        "tool_name": "account_whoami",
+                                        "arguments": {}
+                                    },
+                                    {
+                                        "tool_name": "persona_brief",
+                                        "arguments": {
+                                            "persona_id": mika_handle,
+                                            "intent": "Prepare weekly doujin drop"
+                                        }
+                                    },
+                                    {
+                                        "tool_name": "shard_pool_telemetry",
+                                        "arguments": {}
+                                    }
+                                ]
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(batch_res["success"], true);
+        assert_eq!(batch_res["total_steps"], 3);
+        assert_eq!(batch_res["succeeded"], 3);
+        assert_eq!(batch_res["failed"], 0);
+
+        // 7. Verify MCP swarm_batch_execute returns populated telemetry_snapshot.shards and respects stop_on_error default (true)
+        let mcp_batch_res = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/mcp/tools/swarm_batch_execute")
+                        .header("x-agent-token", &agent_token)
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "actions": [
+                                    { "tool_name": "account_whoami", "arguments": {} },
+                                    { "tool_name": "nonexistent_tool_xyz", "arguments": {} },
+                                    { "tool_name": "shard_pool_telemetry", "arguments": {} }
+                                ]
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(mcp_batch_res["result"]["executed"], 2, "stop_on_error must default to true and halt at step 2");
+        assert_eq!(mcp_batch_res["result"]["succeeded"], 1);
+        assert_eq!(mcp_batch_res["result"]["failed"], 1);
+        assert_eq!(
+            mcp_batch_res["result"]["telemetry_snapshot"]["shards"]
+                .as_array()
+                .map(|a| a.len()),
+            Some(16),
+            "telemetry_snapshot.shards must contain 16 virtual shards"
+        );
+
+        // 8. Verify cross-persona activity ID collision on REST /activities returns 409 Conflict
+        let cross_persona_act_id_conflict = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/agent/personas/{ren_handle}/activities"))
+                    .header("x-agent-token", &agent_token)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "id": "act-mika-drop-777",
+                            "action_type": "post_create_or_update",
+                            "work_ids": ["work-post-999"],
+                            "description": "Reusing Mika's activity ID on Ren must fail with 409"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            cross_persona_act_id_conflict.status(),
+            StatusCode::CONFLICT,
+            "Reusing an activity ID already recorded on another persona must return 409 Conflict"
+        );
+
+        // 9. Verify multiple tokens minted for the same user distribute across distinct shards (UUID entropy included)
+        let mut seen_shards = std::collections::HashSet::new();
+        for idx in 0..8 {
+            let tok_res = body_json(
+                app.clone()
+                    .oneshot(
+                        Request::builder()
+                            .method("POST")
+                            .uri("/api/agent/tokens")
+                            .header("authorization", format!("Bearer {aria_jwt}"))
+                            .header("content-type", "application/json")
+                            .body(Body::from(
+                                serde_json::json!({
+                                    "name": format!("Swarm Worker #{idx}"),
+                                    "pool_tier": "studio"
+                                })
+                                .to_string(),
+                            ))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap(),
+            )
+            .await;
+            seen_shards.insert(tok_res["shard_id"].as_i64().unwrap());
+        }
+        assert!(
+            seen_shards.len() > 1,
+            "Multiple tokens for the same user must hash to multiple virtual shards instead of collapsing to 1 shard"
+        );
+    }
+
+    #[test]
+    fn test_stale_idempotency_lease_reclamation_and_audit_log_isolation() {
+        let conn = init_db(":memory:").expect("sqlite init");
+        let state = AppState {
+            db: Arc::new(Mutex::new(conn)),
+            uploads_dir: "./uploads".into(),
+            public_dir: "../frontend/public".into(),
+            postgres_url: None,
+            postgres_pool_size: 0,
+            postgres_pool: Arc::new(Mutex::new(Vec::new())),
+            postgres_last_failure_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+        };
+
+        // 1. Mint a token for user 1 via MCP
+        let auth_admin = crate::auth::AuthUser {
+            user_id: 1,
+            username: "ariavance".into(),
+            role_id: 1,
+            agent_token_id: None,
+            agent_scopes: None,
+            max_spend_per_tx: None,
+            daily_spend_limit: None,
+            shard_id: Some(2),
+            pool_tier: Some("studio".into()),
+        };
+        let mint_res = crate::mcp::execute_mcp_tool(
+            &state,
+            Some(&auth_admin),
+            "agent_token_create",
+            &serde_json::json!({
+                "name": "Lease Recovery Test Agent",
+                "pool_tier": "studio"
+            }),
+        )
+        .expect("mint token");
+        let token_id = mint_res["token_id"].as_i64().unwrap();
+        let shard_id = mint_res["shard_id"].as_i64().unwrap();
+
+        let agent_user = crate::auth::AuthUser {
+            user_id: 1,
+            username: "ariavance".into(),
+            role_id: 1,
+            agent_token_id: Some(token_id),
+            agent_scopes: Some(vec![
+                "read".into(),
+                "write".into(),
+                "engage".into(),
+                "monetize".into(),
+                "messages".into(),
+                "wallet".into(),
+                "admin".into(),
+            ]),
+            max_spend_per_tx: Some(50.0),
+            daily_spend_limit: Some(200.0),
+            shard_id: Some(shard_id),
+            pool_tier: Some("studio".into()),
+        };
+
+        // 2. Insert a fresh __IN_FLIGHT__ reservation (updated_at_ms = now) -> concurrent call must fail with 409 Conflict
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let expected_hash = crate::sharding::compute_request_hash(
+            "feed_read",
+            Some(&serde_json::json!({ "idempotency_key": "idem-lease-test" })),
+        );
+        {
+            let db = state.lock_db();
+            db.execute(
+                "INSERT INTO agent_action_idempotency (user_id, idempotency_key, tool_name, request_hash, response_json, updated_at_ms)
+                 VALUES (?1, 'idem-lease-test', 'feed_read', ?2, '__IN_FLIGHT__', ?3)",
+                rusqlite::params![1i64, expected_hash, now_ms],
+            )
+            .unwrap();
+        }
+        let fresh_in_flight = crate::mcp::execute_mcp_tool(
+            &state,
+            Some(&agent_user),
+            "feed_read",
+            &serde_json::json!({ "idempotency_key": "idem-lease-test" }),
+        );
+        assert!(
+            matches!(fresh_in_flight, Err(crate::auth::AppError::Conflict(_))),
+            "Active in-flight lease within 60s TTL must return 409 Conflict"
+        );
+
+        // 3. Age the __IN_FLIGHT__ reservation past IN_FLIGHT_LEASE_TTL_MS (e.g. 120s ago) -> must automatically reclaim and succeed!
+        {
+            let db = state.lock_db();
+            db.execute(
+                "UPDATE agent_action_idempotency SET updated_at_ms = ?1 WHERE user_id = 1 AND idempotency_key = 'idem-lease-test'",
+                rusqlite::params![now_ms - 120_000],
+            )
+            .unwrap();
+        }
+        let reclaimed_res = crate::mcp::execute_mcp_tool(
+            &state,
+            Some(&agent_user),
+            "feed_read",
+            &serde_json::json!({ "idempotency_key": "idem-lease-test" }),
+        )
+        .expect("stale in-flight lease must be reclaimed automatically");
+        assert!(reclaimed_res.get("posts").is_some());
+
+        // 4. Verify audit log isolation: calling a read tool (shard_pool_telemetry) after feed_read
+        // must NOT overwrite feed_read's idempotency_key in agent_audit_logs!
+        let _ = crate::mcp::execute_mcp_tool(
+            &state,
+            Some(&agent_user),
+            "shard_pool_telemetry",
+            &serde_json::json!({}),
+        )
+        .expect("shard_pool_telemetry");
+
+        let db = state.lock_db();
+        let feed_idem: Option<String> = db
+            .query_row(
+                "SELECT idempotency_key FROM agent_audit_logs WHERE agent_token_id = ?1 AND tool_name = 'feed_read' ORDER BY id DESC LIMIT 1",
+                rusqlite::params![token_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            feed_idem.as_deref(),
+            Some("idem-lease-test"),
+            "Prior tool's audit log idempotency_key must never be overwritten by subsequent tools"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_canonical_json_hash_strict_validation_mcp_headers_and_pg_circuit_breaker() {
+        // 1. Canonical JSON request hash: key order, integral float normalization (1 vs 1.0), and idempotency_key stripping
+        let hash_a = crate::sharding::compute_request_hash(
+            "post_create",
+            Some(&serde_json::json!({
+                "price": 5,
+                "text": "Canonical Hash Check",
+                "nested": { "b": 2.0, "a": [1, 2.0, 3.5] },
+                "idempotency_key": "key-alpha"
+            })),
+        );
+        let hash_b = crate::sharding::compute_request_hash(
+            "post_create",
+            Some(&serde_json::json!({
+                "idempotency_key": "key-beta-ignored",
+                "nested": { "a": [1.0, 2, 3.5], "b": 2 },
+                "text": "Canonical Hash Check",
+                "price": 5.0
+            })),
+        );
+        assert_eq!(
+            hash_a, hash_b,
+            "Canonical JSON request hash must match across key permutations, 1 vs 1.0 integral floats, and differing idempotency_key values"
+        );
+
+        let app = setup_test_app();
+        let login_res = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/auth/login")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "email": "aria@justfans.local",
+                                "password": "password123"
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        let aria_jwt = login_res["token"].as_str().unwrap().to_string();
+
+        // 2. Mint an agent token
+        let token_res = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/agent/tokens")
+                        .header("authorization", format!("Bearer {aria_jwt}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "name": "Hardening Verification Agent",
+                                "pool_tier": "studio",
+                                "scopes": ["read", "write", "engage", "monetize", "messages", "wallet"]
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        let raw_token = token_res["agent_token"].as_str().unwrap().to_string();
+
+        // 3. Upsert persona validation: invalid focus, invalid autonomy_mode, invalid engagement_cadence, and >64 principles must fail with 422
+        let bad_focus = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/agent/personas")
+                    .header("authorization", format!("Bearer {raw_token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "handle": "bad-focus-persona",
+                            "display_name": "Bad Focus",
+                            "focus": "invalid_focus_type"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(bad_focus.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+        let bad_autonomy = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/agent/personas")
+                    .header("authorization", format!("Bearer {raw_token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "handle": "bad-autonomy-persona",
+                            "display_name": "Bad Autonomy",
+                            "focus": "gravure",
+                            "autonomy_mode": "rogue_ai"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(bad_autonomy.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+        let too_many_principles: Vec<String> = (0..65).map(|i| format!("Principle #{i}")).collect();
+        let bad_principles = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/agent/personas")
+                    .header("authorization", format!("Bearer {raw_token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "handle": "too-many-principles",
+                            "display_name": "Too Many Principles",
+                            "focus": "creator",
+                            "principles": too_many_principles
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(bad_principles.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+        // 4. Create a valid gravure persona
+        let gravure_persona = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/agent/personas")
+                        .header("authorization", format!("Bearer {raw_token}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "handle": "gravure-verifier",
+                                "display_name": "Gravure Verifier",
+                                "focus": "gravure",
+                                "autonomy_mode": "full_autonomous",
+                                "engagement_cadence": "high_touch"
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(gravure_persona["persona"]["focus"], "gravure");
+
+        // 5. Verify GALXAI "fan-art" (with hyphen) is accepted and normalized, while gravure without explicit age or fan-art without source is rejected (422)
+        let gravure_missing_age_hyphen = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/agent/personas/gravure-verifier/activities")
+                    .header("authorization", format!("Bearer {raw_token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "action_type": "post_create",
+                            "description": "Gravure fan-art attempt without explicit age",
+                            "characters": [
+                                { "name": "Asuka", "origin": "fan-art", "source": "Evangelion" }
+                            ]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            gravure_missing_age_hyphen.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Gravure persona activity must reject character depictions without explicit 18+ age"
+        );
+
+        // Create a doujin persona and verify "fan-art" with hyphen is accepted and normalized to "fan_art"
+        let _doujin_persona = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/agent/personas")
+                        .header("authorization", format!("Bearer {raw_token}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "handle": "doujin-verifier",
+                                "display_name": "Doujin Verifier",
+                                "focus": "doujin"
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+
+        let doujin_fan_art_ok = body_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/agent/personas/doujin-verifier/activities")
+                        .header("authorization", format!("Bearer {raw_token}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "action_type": "post_create",
+                                "description": "Doujin tribute illustration",
+                                "work_ids": ["work-tribute-01", "illust_2026_a"],
+                                "characters": [
+                                    { "name": "2B", "origin": "fan-art", "source": "NieR:Automata", "age": 21 }
+                                ]
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            doujin_fan_art_ok["activity"]["characters"][0]["origin"],
+            "fan_art",
+            "GALXAI 'fan-art' origin with hyphen must be accepted and normalized to 'fan_art'"
+        );
+
+        // 6. Verify invalid work_ids (e.g. "../traversal" or spaces) are rejected with 422
+        let invalid_work_id = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/agent/personas/doujin-verifier/activities")
+                    .header("authorization", format!("Bearer {raw_token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "action_type": "post_create",
+                            "description": "Invalid work_id test",
+                            "work_ids": ["../secret-path"]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            invalid_work_id.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "work_ids containing path traversal or invalid characters must return 422"
+        );
+
+        // 7. Verify JSON-RPC POST /api/mcp attaches x-heav3ns-shard, x-heav3ns-pool, x-ratelimit-throttle-mode, x-ratelimit-pacing-ms headers
+        let mcp_rpc_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/mcp")
+                    .header("authorization", format!("Bearer {raw_token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": 77,
+                            "method": "tools/call",
+                            "params": {
+                                "name": "feed_read",
+                                "arguments": { "limit": 2 }
+                            }
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(mcp_rpc_resp.status(), StatusCode::OK);
+        assert!(
+            mcp_rpc_resp.headers().get("x-heav3ns-shard").is_some(),
+            "JSON-RPC /api/mcp must attach x-heav3ns-shard header"
+        );
+        assert_eq!(
+            mcp_rpc_resp
+                .headers()
+                .get("x-heav3ns-pool")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "studio"
+        );
+        assert!(
+            mcp_rpc_resp
+                .headers()
+                .get("x-ratelimit-throttle-mode")
+                .is_some(),
+            "JSON-RPC /api/mcp must attach x-ratelimit-throttle-mode header"
+        );
+        assert!(
+            mcp_rpc_resp
+                .headers()
+                .get("x-ratelimit-pacing-ms")
+                .is_some(),
+            "JSON-RPC /api/mcp must attach x-ratelimit-pacing-ms header"
+        );
+
+        // 8. Verify REST POST /api/agent/swarm/batch returns telemetry_snapshot and shard headers
+        let rest_batch_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/agent/swarm/batch")
+                    .header("authorization", format!("Bearer {raw_token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "stop_on_error": false,
+                            "steps": [
+                                { "tool_name": "feed_read", "arguments": { "limit": 1 } },
+                                { "tool_name": "persona_list", "arguments": {} }
+                            ]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(rest_batch_resp.status(), StatusCode::OK);
+        assert!(rest_batch_resp.headers().get("x-heav3ns-shard").is_some());
+        let rest_batch_json = body_json(rest_batch_resp).await;
+        assert_eq!(rest_batch_json["succeeded"], 2);
+        assert!(
+            rest_batch_json["telemetry_snapshot"]["shards"].is_array(),
+            "REST /api/agent/swarm/batch must include telemetry_snapshot for full MCP parity"
+        );
+        assert!(
+            rest_batch_json["results"][0]["shard_id"].is_number(),
+            "Each batch step must surface its shard_id"
+        );
+
+        // Verify 2^63 (9_223_372_036_854_775_808.0) float boundary is not saturated to i64::MAX
+        let canon_out_of_range = crate::sharding::canonicalize_json_value(
+            &serde_json::json!({ "big": 9_223_372_036_854_775_808.0_f64 }),
+            false,
+        );
+        assert!(
+            canon_out_of_range["big"].is_f64(),
+            "2^63 as f64 must remain f64 rather than saturating to i64::MAX"
+        );
+
+        // 9. Verify PostgreSQL circuit-breaker cooldown avoids blocking on repeated dead Postgres calls
+        // and is isolated per AppState instance (no cross-instance bleed)
+        let conn = init_db(":memory:").expect("sqlite init");
+        let dead_pg_state = AppState {
+            db: Arc::new(Mutex::new(conn)),
+            uploads_dir: "./uploads".into(),
+            public_dir: "../frontend/public".into(),
+            postgres_url: Some("postgres://invalid:invalid@127.0.0.1:59999/nonexistent?connect_timeout=1".into()),
+            postgres_pool_size: 2,
+            postgres_pool: Arc::new(Mutex::new(Vec::new())),
+            postgres_last_failure_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+        };
+        // First call trips the circuit breaker on dead_pg_state
+        let first_res = dead_pg_state.with_postgres(|_client| Ok(1));
+        assert!(first_res.is_none());
+        assert!(
+            dead_pg_state
+                .postgres_last_failure_ms
+                .load(std::sync::atomic::Ordering::Relaxed)
+                > 0
+        );
+        // Second call within cooldown window must short-circuit immediately (< 20ms)
+        let start = std::time::Instant::now();
+        let second_res = dead_pg_state.with_postgres(|_client| Ok(1));
+        assert!(second_res.is_none());
+        assert!(
+            start.elapsed().as_millis() < 20,
+            "Circuit breaker must short-circuit dead PostgreSQL reconnect attempts immediately during cooldown"
+        );
+
+        // A separate AppState instance has its own untripped circuit-breaker counter (0)
+        let conn2 = init_db(":memory:").expect("sqlite init");
+        let isolated_state = AppState {
+            db: Arc::new(Mutex::new(conn2)),
+            uploads_dir: "./uploads".into(),
+            public_dir: "../frontend/public".into(),
+            postgres_url: None,
+            postgres_pool_size: 2,
+            postgres_pool: Arc::new(Mutex::new(Vec::new())),
+            postgres_last_failure_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+        };
+        assert_eq!(
+            isolated_state
+                .postgres_last_failure_ms
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "Separate AppState instances must isolate their circuit-breaker state"
+        );
+    }
 }
+
+
+
 

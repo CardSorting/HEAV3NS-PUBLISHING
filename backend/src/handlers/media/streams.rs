@@ -146,36 +146,54 @@ pub async fn save_stream(
     Json(payload): Json<SaveStreamPayload>,
 ) -> Result<impl IntoResponse, AppError> {
     auth.require_scope("write")?;
-    let name = payload.name.trim();
-    if name.is_empty() {
-        return Err(AppError::Unprocessable("Stream title is required.".into()));
+    let quota_dec = crate::sharding::enforce_agent_rest_quota(&state, &auth, "stream_start").await?;
+    let res: Result<serde_json::Value, AppError> = (|| {
+        let name = payload.name.trim();
+        if name.is_empty() {
+            return Err(AppError::Unprocessable("Stream title is required.".into()));
+        }
+        let slug = name
+            .to_lowercase()
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { '-' })
+            .collect::<String>();
+        let rtmp_key = format!("sk_live_{}_{}", auth.username, &Uuid::new_v4().simple().to_string()[..8]);
+        let price = round_money(payload.price.unwrap_or(0.0).max(0.0));
+        let conn = state.lock_db();
+
+        conn.execute(
+            "INSERT INTO streams (user_id, name, slug, price, requires_subscription, is_public, status, rtmp_key)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'in-progress', ?7)",
+            params![
+                auth.user_id,
+                name,
+                slug,
+                price,
+                if payload.requires_subscription.unwrap_or(false) { 1 } else { 0 },
+                if payload.is_public.unwrap_or(true) { 1 } else { 0 },
+                rtmp_key
+            ],
+        )?;
+        let sid = conn.last_insert_rowid();
+        crate::sharding::record_agent_rest_audit(
+            &conn,
+            &auth,
+            quota_dec.as_ref(),
+            "stream",
+            Some(sid.to_string()),
+            0.0,
+            json!({ "action": "save_stream", "name": name, "price": price }),
+        );
+
+        Ok(json!({
+            "success": true,
+            "stream_id": sid
+        }))
+    })();
+    if res.is_err() {
+        crate::sharding::refund_agent_rest_quota(&state, &auth, quota_dec.as_ref());
     }
-    let slug = name
-        .to_lowercase()
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '-' })
-        .collect::<String>();
-    let rtmp_key = format!("sk_live_{}_{}", auth.username, &Uuid::new_v4().simple().to_string()[..8]);
-    let conn = state.lock_db();
-
-    conn.execute(
-        "INSERT INTO streams (user_id, name, slug, price, requires_subscription, is_public, status, rtmp_key)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'in-progress', ?7)",
-        params![
-            auth.user_id,
-            name,
-            slug,
-            round_money(payload.price.unwrap_or(0.0).max(0.0)),
-            if payload.requires_subscription.unwrap_or(false) { 1 } else { 0 },
-            if payload.is_public.unwrap_or(true) { 1 } else { 0 },
-            rtmp_key
-        ],
-    )?;
-
-    Ok(Json(json!({
-        "success": true,
-        "stream_id": conn.last_insert_rowid()
-    })))
+    res.map(Json)
 }
 
 pub async fn stop_stream(
@@ -184,12 +202,28 @@ pub async fn stop_stream(
     Path(stream_id): Path<i64>,
 ) -> Result<impl IntoResponse, AppError> {
     auth.require_scope("write")?;
-    let conn = state.lock_db();
-    conn.execute(
-        "UPDATE streams SET status = 'ended' WHERE id = ?1 AND (user_id = ?2 OR ?3 = 1)",
-        params![stream_id, auth.user_id, auth.role_id],
-    )?;
-    Ok(Json(json!({ "success": true })))
+    let quota_dec = crate::sharding::enforce_agent_rest_quota(&state, &auth, "stream_stop").await?;
+    let res: Result<serde_json::Value, AppError> = (|| {
+        let conn = state.lock_db();
+        conn.execute(
+            "UPDATE streams SET status = 'ended' WHERE id = ?1 AND (user_id = ?2 OR ?3 = 1)",
+            params![stream_id, auth.user_id, auth.role_id],
+        )?;
+        crate::sharding::record_agent_rest_audit(
+            &conn,
+            &auth,
+            quota_dec.as_ref(),
+            "stream",
+            Some(stream_id.to_string()),
+            0.0,
+            json!({ "action": "stop_stream" }),
+        );
+        Ok(json!({ "success": true }))
+    })();
+    if res.is_err() {
+        crate::sharding::refund_agent_rest_quota(&state, &auth, quota_dec.as_ref());
+    }
+    res.map(Json)
 }
 
 pub async fn delete_stream(
@@ -198,17 +232,33 @@ pub async fn delete_stream(
     Path(stream_id): Path<i64>,
 ) -> Result<impl IntoResponse, AppError> {
     auth.require_scope("write")?;
-    let conn = state.lock_db();
-    let owner_id: i64 = conn.query_row(
-        "SELECT user_id FROM streams WHERE id = ?1",
-        params![stream_id],
-        |r| r.get(0),
-    )?;
-    if owner_id != auth.user_id && auth.role_id != 1 {
-        return Err(AppError::Forbidden("Not authorized to delete this stream.".into()));
+    let quota_dec = crate::sharding::enforce_agent_rest_quota(&state, &auth, "stream_stop").await?;
+    let res: Result<serde_json::Value, AppError> = (|| {
+        let conn = state.lock_db();
+        let owner_id: i64 = conn.query_row(
+            "SELECT user_id FROM streams WHERE id = ?1",
+            params![stream_id],
+            |r| r.get(0),
+        )?;
+        if owner_id != auth.user_id && auth.role_id != 1 {
+            return Err(AppError::Forbidden("Not authorized to delete this stream.".into()));
+        }
+        conn.execute("DELETE FROM streams WHERE id = ?1", params![stream_id])?;
+        crate::sharding::record_agent_rest_audit(
+            &conn,
+            &auth,
+            quota_dec.as_ref(),
+            "stream",
+            Some(stream_id.to_string()),
+            0.0,
+            json!({ "action": "delete_stream" }),
+        );
+        Ok(json!({ "success": true }))
+    })();
+    if res.is_err() {
+        crate::sharding::refund_agent_rest_quota(&state, &auth, quota_dec.as_ref());
     }
-    conn.execute("DELETE FROM streams WHERE id = ?1", params![stream_id])?;
-    Ok(Json(json!({ "success": true })))
+    res.map(Json)
 }
 
 pub async fn get_stream_detail(
@@ -308,42 +358,58 @@ pub async fn add_stream_comment(
     Json(payload): Json<StreamCommentPayload>,
 ) -> Result<impl IntoResponse, AppError> {
     auth.require_scope("engage")?;
-    let msg = payload.message.trim();
-    if msg.is_empty() {
-        return Err(AppError::Unprocessable("Message cannot be empty.".into()));
-    }
-    let conn = state.lock_db();
-    let (owner_id, price, req_sub): (i64, f64, bool) = conn.query_row(
-        "SELECT user_id, price, requires_subscription FROM streams WHERE id = ?1",
-        params![payload.stream_id],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get::<_, i64>(2)? != 0)),
-    )?;
-    if is_blocked_between(&conn, auth.user_id, owner_id) {
-        return Err(AppError::Forbidden("Cannot chat in this stream.".into()));
-    }
-    if !compute_stream_unlocked(&conn, payload.stream_id, owner_id, price, req_sub, Some(auth.user_id)) {
-        return Err(AppError::Forbidden("Unlock this live stream to participate in chat.".into()));
-    }
-
-    conn.execute(
-        "INSERT INTO stream_messages (stream_id, user_id, message) VALUES (?1, ?2, ?3)",
-        params![payload.stream_id, auth.user_id, msg],
-    )?;
-    let id = conn.last_insert_rowid();
-    let user = get_user_public_profile(&conn, auth.user_id, Some(auth.user_id))?;
-
-    Ok(Json(json!({
-        "success": true,
-        "comment": StreamMessageView {
-            id,
-            stream_id: payload.stream_id,
-            user_id: auth.user_id,
-            user_name: user.name,
-            user_username: user.username,
-            user_avatar: user.avatar,
-            message: msg.to_string(),
-            created_at: "Just now".into()
+    let quota_dec = crate::sharding::enforce_agent_rest_quota(&state, &auth, "post_comment").await?;
+    let res: Result<serde_json::Value, AppError> = (|| {
+        let msg = payload.message.trim();
+        if msg.is_empty() {
+            return Err(AppError::Unprocessable("Message cannot be empty.".into()));
         }
-    })))
+        let conn = state.lock_db();
+        let (owner_id, price, req_sub): (i64, f64, bool) = conn.query_row(
+            "SELECT user_id, price, requires_subscription FROM streams WHERE id = ?1",
+            params![payload.stream_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get::<_, i64>(2)? != 0)),
+        )?;
+        if is_blocked_between(&conn, auth.user_id, owner_id) {
+            return Err(AppError::Forbidden("Cannot chat in this stream.".into()));
+        }
+        if !compute_stream_unlocked(&conn, payload.stream_id, owner_id, price, req_sub, Some(auth.user_id)) {
+            return Err(AppError::Forbidden("Unlock this live stream to participate in chat.".into()));
+        }
+
+        conn.execute(
+            "INSERT INTO stream_messages (stream_id, user_id, message) VALUES (?1, ?2, ?3)",
+            params![payload.stream_id, auth.user_id, msg],
+        )?;
+        let id = conn.last_insert_rowid();
+        let user = get_user_public_profile(&conn, auth.user_id, Some(auth.user_id))?;
+        crate::sharding::record_agent_rest_audit(
+            &conn,
+            &auth,
+            quota_dec.as_ref(),
+            "stream_message",
+            Some(id.to_string()),
+            0.0,
+            json!({ "stream_id": payload.stream_id }),
+        );
+
+        Ok(json!({
+            "success": true,
+            "comment": StreamMessageView {
+                id,
+                stream_id: payload.stream_id,
+                user_id: auth.user_id,
+                user_name: user.name,
+                user_username: user.username,
+                user_avatar: user.avatar,
+                message: msg.to_string(),
+                created_at: "Just now".into()
+            }
+        }))
+    })();
+    if res.is_err() {
+        crate::sharding::refund_agent_rest_quota(&state, &auth, quota_dec.as_ref());
+    }
+    res.map(Json)
 }
 

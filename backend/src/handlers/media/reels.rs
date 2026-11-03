@@ -156,24 +156,41 @@ pub async fn create_reel(
     Json(payload): Json<CreateReelPayload>,
 ) -> Result<impl IntoResponse, AppError> {
     auth.require_scope("write")?;
-    let conn = state.lock_db();
-    let vurl = payload
-        .video_url
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| "/img/video-loading-spinner.mp4".into());
-    let curl = payload
-        .cover_url
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| "/img/home-scene-1.svg".into());
-    let price = round_money(payload.price.unwrap_or(0.0).max(0.0));
-    conn.execute(
-        "INSERT INTO reels (user_id, caption, video_url, cover_url, price) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![auth.user_id, payload.caption.trim(), vurl, curl, price],
-    )?;
-    Ok(Json(json!({
-        "success": true,
-        "reel_id": conn.last_insert_rowid()
-    })))
+    let quota_dec = crate::sharding::enforce_agent_rest_quota(&state, &auth, "reel_create").await?;
+    let res: Result<serde_json::Value, AppError> = (|| {
+        let conn = state.lock_db();
+        let vurl = payload
+            .video_url
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "/img/video-loading-spinner.mp4".into());
+        let curl = payload
+            .cover_url
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "/img/home-scene-1.svg".into());
+        let price = round_money(payload.price.unwrap_or(0.0).max(0.0));
+        conn.execute(
+            "INSERT INTO reels (user_id, caption, video_url, cover_url, price) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![auth.user_id, payload.caption.trim(), vurl, curl, price],
+        )?;
+        let rid = conn.last_insert_rowid();
+        crate::sharding::record_agent_rest_audit(
+            &conn,
+            &auth,
+            quota_dec.as_ref(),
+            "reel",
+            Some(rid.to_string()),
+            0.0,
+            json!({ "action": "create_reel", "price": price }),
+        );
+        Ok(json!({
+            "success": true,
+            "reel_id": rid
+        }))
+    })();
+    if res.is_err() {
+        crate::sharding::refund_agent_rest_quota(&state, &auth, quota_dec.as_ref());
+    }
+    res.map(Json)
 }
 
 pub async fn increment_reel_view(
@@ -200,17 +217,33 @@ pub async fn delete_reel(
     Path(reel_id): Path<i64>,
 ) -> Result<impl IntoResponse, AppError> {
     auth.require_scope("write")?;
-    let conn = state.lock_db();
-    let owner_id: i64 = conn.query_row(
-        "SELECT user_id FROM reels WHERE id = ?1",
-        params![reel_id],
-        |r| r.get(0),
-    )?;
-    if owner_id != auth.user_id && auth.role_id != 1 {
-        return Err(AppError::Forbidden("Not authorized to delete this reel.".into()));
+    let quota_dec = crate::sharding::enforce_agent_rest_quota(&state, &auth, "reel_create").await?;
+    let res: Result<serde_json::Value, AppError> = (|| {
+        let conn = state.lock_db();
+        let owner_id: i64 = conn.query_row(
+            "SELECT user_id FROM reels WHERE id = ?1",
+            params![reel_id],
+            |r| r.get(0),
+        )?;
+        if owner_id != auth.user_id && auth.role_id != 1 {
+            return Err(AppError::Forbidden("Not authorized to delete this reel.".into()));
+        }
+        conn.execute("DELETE FROM reels WHERE id = ?1", params![reel_id])?;
+        crate::sharding::record_agent_rest_audit(
+            &conn,
+            &auth,
+            quota_dec.as_ref(),
+            "reel",
+            Some(reel_id.to_string()),
+            0.0,
+            json!({ "action": "delete_reel" }),
+        );
+        Ok(json!({ "success": true }))
+    })();
+    if res.is_err() {
+        crate::sharding::refund_agent_rest_quota(&state, &auth, quota_dec.as_ref());
     }
-    conn.execute("DELETE FROM reels WHERE id = ?1", params![reel_id])?;
-    Ok(Json(json!({ "success": true })))
+    res.map(Json)
 }
 
 pub async fn get_reel_comments(
@@ -261,44 +294,60 @@ pub async fn add_reel_comment(
     Json(payload): Json<AddReelCommentPayload>,
 ) -> Result<impl IntoResponse, AppError> {
     auth.require_scope("engage")?;
-    let msg = payload.message.trim();
-    if msg.is_empty() {
-        return Err(AppError::Unprocessable("Comment cannot be empty.".into()));
-    }
-    let conn = state.lock_db();
-    let (owner_id, price): (i64, f64) = conn.query_row(
-        "SELECT user_id, price FROM reels WHERE id = ?1",
-        params![payload.reel_id],
-        |r| Ok((r.get(0)?, r.get(1)?)),
-    )?;
-    if is_blocked_between(&conn, auth.user_id, owner_id) {
-        return Err(AppError::Forbidden("Cannot comment on this creator's reel.".into()));
-    }
-    if !compute_reel_unlocked(&conn, payload.reel_id, owner_id, price, Some(auth.user_id)) {
-        return Err(AppError::Forbidden("Unlock this reel before commenting.".into()));
-    }
-
-    conn.execute(
-        "INSERT INTO reel_comments (reel_id, user_id, message) VALUES (?1, ?2, ?3)",
-        params![payload.reel_id, auth.user_id, msg],
-    )?;
-    let cid = conn.last_insert_rowid();
-    let user = get_user_public_profile(&conn, auth.user_id, Some(auth.user_id))?;
-
-    Ok(Json(json!({
-        "success": true,
-        "comment": ReelCommentView {
-            id: cid,
-            reel_id: payload.reel_id,
-            user_id: auth.user_id,
-            user_name: user.name,
-            user_username: user.username,
-            user_avatar: user.avatar,
-            user_verified: user.is_verified,
-            message: msg.to_string(),
-            created_at: "Just now".into(),
+    let quota_dec = crate::sharding::enforce_agent_rest_quota(&state, &auth, "post_comment").await?;
+    let res: Result<serde_json::Value, AppError> = (|| {
+        let msg = payload.message.trim();
+        if msg.is_empty() {
+            return Err(AppError::Unprocessable("Comment cannot be empty.".into()));
         }
-    })))
+        let conn = state.lock_db();
+        let (owner_id, price): (i64, f64) = conn.query_row(
+            "SELECT user_id, price FROM reels WHERE id = ?1",
+            params![payload.reel_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        if is_blocked_between(&conn, auth.user_id, owner_id) {
+            return Err(AppError::Forbidden("Cannot comment on this creator's reel.".into()));
+        }
+        if !compute_reel_unlocked(&conn, payload.reel_id, owner_id, price, Some(auth.user_id)) {
+            return Err(AppError::Forbidden("Unlock this reel before commenting.".into()));
+        }
+
+        conn.execute(
+            "INSERT INTO reel_comments (reel_id, user_id, message) VALUES (?1, ?2, ?3)",
+            params![payload.reel_id, auth.user_id, msg],
+        )?;
+        let cid = conn.last_insert_rowid();
+        let user = get_user_public_profile(&conn, auth.user_id, Some(auth.user_id))?;
+        crate::sharding::record_agent_rest_audit(
+            &conn,
+            &auth,
+            quota_dec.as_ref(),
+            "reel_comment",
+            Some(cid.to_string()),
+            0.0,
+            json!({ "reel_id": payload.reel_id }),
+        );
+
+        Ok(json!({
+            "success": true,
+            "comment": ReelCommentView {
+                id: cid,
+                reel_id: payload.reel_id,
+                user_id: auth.user_id,
+                user_name: user.name,
+                user_username: user.username,
+                user_avatar: user.avatar,
+                user_verified: user.is_verified,
+                message: msg.to_string(),
+                created_at: "Just now".into(),
+            }
+        }))
+    })();
+    if res.is_err() {
+        crate::sharding::refund_agent_rest_quota(&state, &auth, quota_dec.as_ref());
+    }
+    res.map(Json)
 }
 
 pub async fn delete_reel_comment(
@@ -307,16 +356,32 @@ pub async fn delete_reel_comment(
     Path(comment_id): Path<i64>,
 ) -> Result<impl IntoResponse, AppError> {
     auth.require_scope("engage")?;
-    let conn = state.lock_db();
-    let (comment_user_id, reel_owner_id): (i64, i64) = conn.query_row(
-        "SELECT rc.user_id, r.user_id FROM reel_comments rc JOIN reels r ON rc.reel_id = r.id WHERE rc.id = ?1",
-        params![comment_id],
-        |r| Ok((r.get(0)?, r.get(1)?)),
-    )?;
-    if comment_user_id != auth.user_id && reel_owner_id != auth.user_id && auth.role_id != 1 {
-        return Err(AppError::Forbidden("Not authorized to delete this comment.".into()));
+    let quota_dec = crate::sharding::enforce_agent_rest_quota(&state, &auth, "post_comment").await?;
+    let res: Result<serde_json::Value, AppError> = (|| {
+        let conn = state.lock_db();
+        let (comment_user_id, reel_owner_id): (i64, i64) = conn.query_row(
+            "SELECT rc.user_id, r.user_id FROM reel_comments rc JOIN reels r ON rc.reel_id = r.id WHERE rc.id = ?1",
+            params![comment_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        if comment_user_id != auth.user_id && reel_owner_id != auth.user_id && auth.role_id != 1 {
+            return Err(AppError::Forbidden("Not authorized to delete this comment.".into()));
+        }
+        conn.execute("DELETE FROM reel_comments WHERE id = ?1", params![comment_id])?;
+        crate::sharding::record_agent_rest_audit(
+            &conn,
+            &auth,
+            quota_dec.as_ref(),
+            "reel_comment",
+            Some(comment_id.to_string()),
+            0.0,
+            json!({ "action": "delete_reel_comment" }),
+        );
+        Ok(json!({ "success": true }))
+    })();
+    if res.is_err() {
+        crate::sharding::refund_agent_rest_quota(&state, &auth, quota_dec.as_ref());
     }
-    conn.execute("DELETE FROM reel_comments WHERE id = ?1", params![comment_id])?;
-    Ok(Json(json!({ "success": true })))
+    res.map(Json)
 }
 

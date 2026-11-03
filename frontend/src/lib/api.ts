@@ -66,6 +66,9 @@ export interface PersonaActivityItem {
   practice_revision: number;
   action_type: string;
   target_resource_id?: string | null;
+  work_ids?: string[];
+  characters?: { name: string; origin: string; source?: string; age?: number }[];
+  brief?: string | null;
   description: string;
   occurred_at: string;
   recorded_at: string;

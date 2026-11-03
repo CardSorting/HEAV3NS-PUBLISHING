@@ -1,11 +1,29 @@
 use postgres::{Client as PgClient, NoTls};
 use rusqlite::{params, Connection};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{
+    atomic::{AtomicI64, Ordering},
+    Arc, Mutex, MutexGuard,
+};
 
 use crate::models::{
     Attachment, CreatorOfferView, PollAnswerView, PollView, PostCommentView, PostView,
     UserPublicProfile,
 };
+
+pub const POSTGRES_CIRCUIT_BREAKER_COOLDOWN_MS: i64 = 5_000;
+
+fn connect_postgres_safe(url: &str) -> Result<PgClient, String> {
+    if tokio::runtime::Handle::try_current().is_ok() {
+        let owned = url.to_string();
+        std::thread::spawn(move || {
+            PgClient::connect(&owned, NoTls).map_err(|e| format!("{e}"))
+        })
+        .join()
+        .map_err(|_| "PostgreSQL connect thread panicked".to_string())?
+    } else {
+        PgClient::connect(url, NoTls).map_err(|e| format!("{e}"))
+    }
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -15,6 +33,7 @@ pub struct AppState {
     pub postgres_url: Option<String>,
     pub postgres_pool_size: usize,
     pub postgres_pool: Arc<Mutex<Vec<PgClient>>>,
+    pub postgres_last_failure_ms: Arc<AtomicI64>,
 }
 
 impl AppState {
@@ -31,28 +50,48 @@ impl AppState {
     }
 
     /// Borrows a PostgreSQL connection from the pool (or opens a new one up to `postgres_pool_size`),
-    /// executes `f`, and returns the healthy client back to the pool. If a pooled connection fails
-    /// due to a server restart or idle disconnect, it transparently opens a fresh connection and retries once.
+    /// validates connection liveness (`is_closed()`), executes `f`, and returns the healthy client
+    /// back to the pool. Includes a lightweight circuit-breaker cooldown (`POSTGRES_CIRCUIT_BREAKER_COOLDOWN_MS`)
+    /// so if `PgClient::connect` fails, subsequent calls skip blocking reconnect attempts for 5 seconds
+    /// and fall back cleanly to the embedded WAL store without stalling the agent swarm.
     pub fn with_postgres<F, R>(&self, mut f: F) -> Option<R>
     where
         F: FnMut(&mut PgClient) -> Result<R, postgres::Error>,
     {
         let url = self.postgres_url.as_deref()?;
+        let now_ms = chrono::Utc::now().timestamp_millis();
         let mut from_pool = false;
         let mut client_opt = {
             let mut pool = self
                 .postgres_pool
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let popped = pool.pop();
-            if popped.is_some() {
-                from_pool = true;
+            let mut candidate = None;
+            while let Some(c) = pool.pop() {
+                if !c.is_closed() {
+                    candidate = Some(c);
+                    from_pool = true;
+                    break;
+                }
             }
-            popped
+            candidate
         };
 
         if client_opt.is_none() {
-            client_opt = PgClient::connect(url, NoTls).ok();
+            let last_fail = self.postgres_last_failure_ms.load(Ordering::Relaxed);
+            if last_fail > 0 && (now_ms - last_fail) < POSTGRES_CIRCUIT_BREAKER_COOLDOWN_MS {
+                return None;
+            }
+            match connect_postgres_safe(url) {
+                Ok(c) => {
+                    self.postgres_last_failure_ms.store(0, Ordering::Relaxed);
+                    client_opt = Some(c);
+                }
+                Err(_) => {
+                    self.postgres_last_failure_ms.store(now_ms, Ordering::Relaxed);
+                    return None;
+                }
+            }
         }
 
         let mut client = client_opt?;
@@ -60,22 +99,34 @@ impl AppState {
 
         // If a pooled connection failed (e.g. PostgreSQL restarted), drop it and retry once on a fresh connection
         if res.is_none() && from_pool {
-            if let Ok(mut fresh_client) = PgClient::connect(url, NoTls) {
-                if let Ok(retry_val) = f(&mut fresh_client) {
-                    let mut pool = self
-                        .postgres_pool
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    if pool.len() < self.postgres_pool_size {
-                        pool.push(fresh_client);
+            let last_fail = self.postgres_last_failure_ms.load(Ordering::Relaxed);
+            if last_fail > 0 && (now_ms - last_fail) < POSTGRES_CIRCUIT_BREAKER_COOLDOWN_MS {
+                return None;
+            }
+            match connect_postgres_safe(url) {
+                Ok(mut fresh_client) => {
+                    self.postgres_last_failure_ms.store(0, Ordering::Relaxed);
+                    if let Ok(retry_val) = f(&mut fresh_client) {
+                        if !fresh_client.is_closed() {
+                            let mut pool = self
+                                .postgres_pool
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                            if pool.len() < self.postgres_pool_size {
+                                pool.push(fresh_client);
+                            }
+                        }
+                        return Some(retry_val);
                     }
-                    return Some(retry_val);
+                }
+                Err(_) => {
+                    self.postgres_last_failure_ms.store(now_ms, Ordering::Relaxed);
                 }
             }
             return None;
         }
 
-        if res.is_some() {
+        if res.is_some() && !client.is_closed() {
             let mut pool = self
                 .postgres_pool
                 .lock()
@@ -87,14 +138,45 @@ impl AppState {
         res.take()
     }
 
+    /// Executes a closure inside an explicit PostgreSQL transaction (`BEGIN` -> `f(tx)` -> `COMMIT` / `ROLLBACK`),
+    /// mirroring GALXAI's `inGalxTransaction` in `src/lib/galx-database.ts`.
+    pub fn in_postgres_transaction<F, R>(&self, mut f: F) -> Option<R>
+    where
+        F: FnMut(&mut postgres::Transaction<'_>) -> Result<R, postgres::Error>,
+    {
+        self.with_postgres(|pg| {
+            let mut tx = pg.transaction()?;
+            match f(&mut tx) {
+                Ok(val) => {
+                    tx.commit()?;
+                    Ok(val)
+                }
+                Err(err) => {
+                    let _ = tx.rollback();
+                    Err(err)
+                }
+            }
+        })
+    }
+
+    /// Returns current idle connection count in the PostgreSQL pool.
+    pub fn postgres_idle_connections(&self) -> usize {
+        let mut pool = self
+            .postgres_pool
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        pool.retain(|c| !c.is_closed());
+        pool.len()
+    }
+
     /// Synchronizes an autonomous persona residency and its revision/activity JSON to PostgreSQL when active.
     pub fn sync_persona_to_postgres(&self, persona: &crate::sharding::AgentPersonaView) {
         let practices_str =
             serde_json::to_string(&persona.practices).unwrap_or_else(|_| "[]".to_string());
         let activities_str =
             serde_json::to_string(&persona.activities).unwrap_or_else(|_| "[]".to_string());
-        self.with_postgres(|pg| {
-            let _ = pg.execute(
+        self.in_postgres_transaction(|tx| {
+            let _ = tx.execute(
                 "INSERT INTO agent_personas
                  (id, user_id, handle, display_name, description, focus, shard_id, pool_tier,
                   autonomy_mode, engagement_cadence, current_revision, practices_json, activities_json)
@@ -607,7 +689,9 @@ pub fn init_db(db_path: &str) -> Result<Connection, rusqlite::Error> {
             idempotency_key TEXT NOT NULL,
             user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             tool_name TEXT NOT NULL,
+            request_hash TEXT NOT NULL DEFAULT '',
             response_json TEXT NOT NULL,
+            updated_at_ms INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             PRIMARY KEY (user_id, idempotency_key)
         );
@@ -645,6 +729,8 @@ pub fn init_db(db_path: &str) -> Result<Connection, rusqlite::Error> {
         "ALTER TABLE agent_audit_logs ADD COLUMN throttle_mode TEXT NOT NULL DEFAULT 'smooth'",
         "ALTER TABLE agent_audit_logs ADD COLUMN pacing_delay_ms INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE agent_audit_logs ADD COLUMN idempotency_key TEXT",
+        "ALTER TABLE agent_action_idempotency ADD COLUMN request_hash TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE agent_action_idempotency ADD COLUMN updated_at_ms INTEGER NOT NULL DEFAULT 0",
     ] {
         let _ = conn.execute(alter_sql, []);
     }

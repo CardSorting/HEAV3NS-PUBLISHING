@@ -122,6 +122,29 @@ const SAMPLE_TOOL_TEMPLATES: Record<string, { label: string; category: string; a
       price: 0,
     },
   },
+  persona_bootstrap_roster: {
+    label: 'persona_bootstrap_roster — Install 4 Commissioned Studio Personas (Mika, Ren, Sora, Nagi)',
+    category: 'Autonomous Personas',
+    args: {},
+  },
+  swarm_batch_execute: {
+    label: 'swarm_batch_execute — Multi-Step Swarm Action Pipeline with Per-Shard Pacing',
+    category: 'Shards & Quotas',
+    args: {
+      stop_on_error: true,
+      actions: [
+        { tool_name: 'account_whoami', arguments: {} },
+        { tool_name: 'shard_pool_telemetry', arguments: {} },
+        {
+          tool_name: 'persona_brief',
+          arguments: {
+            persona_id: 'aria-neon-architect',
+            intent: 'Coordinate multi-persona weekend collector drop',
+          },
+        },
+      ],
+    },
+  },
   analytics_and_notifications: {
     label: 'analytics_and_notifications — Read 85/15 Revenue Split & Audit Trail',
     category: 'Analytics',
@@ -183,15 +206,28 @@ function AgentsHubContent() {
   const [personaDirection, setPersonaDirection] = useState('');
   const [savingPersona, setSavingPersona] = useState(false);
 
-  // Practice Revision & Brief Compiler State
+  // Practice Revision, Brief Compiler & Continuity Activity Recorder State
   const [selectedPersonaId, setSelectedPersonaId] = useState<string>('');
   const [newRevisionDirection, setNewRevisionDirection] = useState('');
   const [briefIntent, setBriefIntent] = useState(
     'Publish an interactive poll and reward top subscriber comments with behind-the-scenes studio notes'
   );
   const [compiledBrief, setCompiledBrief] = useState<any>(null);
+  const [bootstrappingRoster, setBootstrappingRoster] = useState(false);
+  const [shardPoolFilter, setShardPoolFilter] = useState<string>('all');
 
-  // Interactive MCP Playground State
+  // Continuity Activity Recording Form State
+  const [activityActionType, setActivityActionType] = useState('post_create');
+  const [activityWorkIds, setActivityWorkIds] = useState('work-drop-2026-01');
+  const [activityDescription, setActivityDescription] = useState('');
+  const [activityCharName, setActivityCharName] = useState('');
+  const [activityCharOrigin, setActivityCharOrigin] = useState<'original' | 'fan-art'>('original');
+  const [activityCharSource, setActivityCharSource] = useState('');
+  const [activityCharAge, setActivityCharAge] = useState('22');
+  const [recordingActivity, setRecordingActivity] = useState(false);
+
+  // Interactive MCP Playground & Swarm Batch Pipeline State
+  const [consoleMode, setConsoleMode] = useState<'single' | 'batch'>('single');
   const [selectedTool, setSelectedTool] = useState('account_whoami');
   const [toolArgsText, setToolArgsText] = useState(
     JSON.stringify(SAMPLE_TOOL_TEMPLATES.account_whoami.args, null, 2)
@@ -200,6 +236,87 @@ function AgentsHubContent() {
   const [rpcMode, setRpcMode] = useState<'jsonrpc' | 'rest'>('jsonrpc');
   const [toolRunning, setToolRunning] = useState(false);
   const [toolOutput, setToolOutput] = useState<any>(null);
+
+  const [batchStopOnError, setBatchStopOnError] = useState(true);
+  const [batchSteps, setBatchSteps] = useState<
+    Array<{ tool_name: string; argumentsText: string; idempotency_key: string }>
+  >([
+    { tool_name: 'account_whoami', argumentsText: '{}', idempotency_key: '' },
+    { tool_name: 'shard_pool_telemetry', argumentsText: '{}', idempotency_key: '' },
+    {
+      tool_name: 'feed_read',
+      argumentsText: JSON.stringify({ limit: 2 }, null, 2),
+      idempotency_key: 'swarm-step-feed-01',
+    },
+  ]);
+  const [batchRunning, setBatchRunning] = useState(false);
+  const [batchResult, setBatchResult] = useState<any>(null);
+
+  // Audit Log Search & Filter State
+  const [auditSearch, setAuditSearch] = useState('');
+  const [auditShardFilter, setAuditShardFilter] = useState('all');
+  const [auditPoolFilter, setAuditPoolFilter] = useState('all');
+  const [auditModeFilter, setAuditModeFilter] = useState('all');
+
+  const switchView = (
+    nextView: 'keys' | 'shards' | 'personas' | 'playground' | 'audit' | 'connect'
+  ) => {
+    setActiveView(nextView);
+    if (typeof window !== 'undefined') {
+      const url = new URL(window.location.href);
+      url.searchParams.set('view', nextView);
+      window.history.replaceState({}, '', url.toString());
+    }
+  };
+
+  useEffect(() => {
+    const v = searchParams.get('view');
+    if (
+      v === 'keys' ||
+      v === 'shards' ||
+      v === 'personas' ||
+      v === 'playground' ||
+      v === 'audit' ||
+      v === 'connect'
+    ) {
+      setActiveView(v);
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (
+        !target ||
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.tagName === 'SELECT' ||
+        target.isContentEditable ||
+        e.metaKey ||
+        e.ctrlKey ||
+        e.altKey
+      ) {
+        return;
+      }
+      const viewMap: Record<
+        string,
+        'keys' | 'personas' | 'shards' | 'playground' | 'audit' | 'connect'
+      > = {
+        '1': 'keys',
+        '2': 'personas',
+        '3': 'shards',
+        '4': 'playground',
+        '5': 'audit',
+        '6': 'connect',
+      };
+      if (viewMap[e.key]) {
+        e.preventDefault();
+        switchView(viewMap[e.key]);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   const loadData = async () => {
     setLoading(true);
@@ -377,6 +494,33 @@ function AgentsHubContent() {
     }
   };
 
+  const handleBootstrapRoster = async () => {
+    setBootstrappingRoster(true);
+    setStatusMsg(null);
+    try {
+      const res = await apiFetch('/api/agent/personas/roster', {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      setPersonas(res.personas || []);
+      if (!selectedPersonaId && res.personas?.length > 0) {
+        setSelectedPersonaId(res.personas[0].id);
+      }
+      setStatusMsg({
+        type: 'success',
+        text: `Commissioned Studio Roster synced (${res.installed_count} newly installed, evolved revisions preserved across all 4 studio personas: Mika, Ren, Sora, Nagi)!`,
+      });
+      await loadData();
+    } catch (err: any) {
+      setStatusMsg({
+        type: 'danger',
+        text: err.message || 'Failed to bootstrap commissioned persona roster',
+      });
+    } finally {
+      setBootstrappingRoster(false);
+    }
+  };
+
   const handleSelectTemplate = (toolName: string) => {
     setSelectedTool(toolName);
     if (SAMPLE_TOOL_TEMPLATES[toolName]) {
@@ -440,6 +584,102 @@ function AgentsHubContent() {
     }
   };
 
+  const handleRecordActivity = async (persona: AgentPersonaItem) => {
+    if (!activityDescription.trim()) return;
+    setRecordingActivity(true);
+    setStatusMsg(null);
+    try {
+      const workIds = activityWorkIds
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const characters = activityCharName.trim()
+        ? [
+            {
+              name: activityCharName.trim(),
+              origin: activityCharOrigin,
+              source: activityCharSource.trim() || undefined,
+              age: parseInt(activityCharAge, 10) || undefined,
+            },
+          ]
+        : undefined;
+      const res = await apiFetch(`/api/agent/personas/${persona.id}/activities`, {
+        method: 'POST',
+        body: JSON.stringify({
+          action_type: activityActionType,
+          description: activityDescription.trim(),
+          work_ids: workIds.length > 0 ? workIds : undefined,
+          characters,
+        }),
+      });
+      setActivityDescription('');
+      setStatusMsg({
+        type: 'success',
+        text: `Recorded continuity activity (${res.activity?.action_type || activityActionType}) on @${persona.handle}!`,
+      });
+      await loadData();
+    } catch (err: any) {
+      setStatusMsg({
+        type: 'danger',
+        text: err.message || 'Failed to record persona activity',
+      });
+    } finally {
+      setRecordingActivity(false);
+    }
+  };
+
+  const handleExecuteBatch = async () => {
+    setBatchRunning(true);
+    setStatusMsg(null);
+    try {
+      const stepsPayload = batchSteps.map((s, idx) => {
+        let parsed: Record<string, any> = {};
+        if (s.argumentsText.trim()) {
+          try {
+            parsed = JSON.parse(s.argumentsText);
+          } catch (parseErr: any) {
+            throw new Error(
+              `Step #${idx + 1} (${s.tool_name || 'unnamed'}) has invalid JSON arguments: ${
+                parseErr?.message || 'syntax error'
+              }`
+            );
+          }
+        }
+        return {
+          tool_name: s.tool_name,
+          arguments: parsed,
+          idempotency_key: s.idempotency_key.trim() || undefined,
+        };
+      });
+      const extraHeaders: Record<string, string> = {};
+      if (customTokenHeader.trim()) {
+        extraHeaders['X-Agent-Token'] = customTokenHeader.trim();
+      }
+      const res = await apiFetch('/api/agent/swarm/batch', {
+        method: 'POST',
+        headers: extraHeaders,
+        body: JSON.stringify({
+          stop_on_error: batchStopOnError,
+          steps: stepsPayload,
+        }),
+      });
+      setBatchResult(res);
+      if (res.telemetry_snapshot) {
+        setShardTelemetry((prev: any) => ({
+          ...(prev || {}),
+          shards: res.telemetry_snapshot.shards || prev?.shards,
+          cluster_summary: res.telemetry_snapshot.cluster_summary || prev?.cluster_summary,
+        }));
+      }
+      await refreshUser();
+      await loadData();
+    } catch (err: any) {
+      setBatchResult({ error: err.message || 'Swarm batch execution failed' });
+    } finally {
+      setBatchRunning(false);
+    }
+  };
+
   const activeTokensCount = tokens.filter((t) => t.is_active).length;
   const total24hSpend = tokens.reduce(
     (acc, t) => acc + (t.spent_last_24h ?? t.spent_today ?? 0),
@@ -449,6 +689,25 @@ function AgentsHubContent() {
   const shardsList: ShardMetricItem[] = shardTelemetry?.shards || [];
   const selectedPersona =
     personas.find((p) => p.id === selectedPersonaId) || personas[0] || null;
+  const filteredAuditLogs = auditLogs.filter((log) => {
+    if (auditShardFilter !== 'all' && String(log.shard_id ?? 0) !== auditShardFilter) {
+      return false;
+    }
+    if (auditPoolFilter !== 'all' && (log.pool_tier || 'central') !== auditPoolFilter) {
+      return false;
+    }
+    if (auditModeFilter !== 'all' && (log.throttle_mode || 'smooth') !== auditModeFilter) {
+      return false;
+    }
+    if (auditSearch.trim()) {
+      const q = auditSearch.trim().toLowerCase();
+      const matchTool = (log.tool_name || '').toLowerCase().includes(q);
+      const matchDetails = (log.details || '').toLowerCase().includes(q);
+      const matchAgent = (log.agent_name || '').toLowerCase().includes(q);
+      if (!matchTool && !matchDetails && !matchAgent) return false;
+    }
+    return true;
+  });
 
   return (
     <AppShell>
@@ -591,62 +850,73 @@ function AgentsHubContent() {
         )}
 
         {/* Navigation Tabs */}
-        <ul className="nav nav-pills flex-wrap gap-2 mb-4">
-          <li className="nav-item">
-            <button
-              type="button"
-              className={`nav-link rounded-pill fw-semibold ${activeView === 'keys' ? 'active' : ''}`}
-              onClick={() => setActiveView('keys')}
-            >
-              🔑 Keys, Pools &amp; Soft Quotas ({tokens.length})
-            </button>
-          </li>
-          <li className="nav-item">
-            <button
-              type="button"
-              className={`nav-link rounded-pill fw-semibold ${activeView === 'personas' ? 'active' : ''}`}
-              onClick={() => setActiveView('personas')}
-            >
-              🎭 Autonomous Persona Studio ({personas.length})
-            </button>
-          </li>
-          <li className="nav-item">
-            <button
-              type="button"
-              className={`nav-link rounded-pill fw-semibold ${activeView === 'shards' ? 'active' : ''}`}
-              onClick={() => setActiveView('shards')}
-            >
-              🌐 16-Shard &amp; PostgreSQL Telemetry
-            </button>
-          </li>
-          <li className="nav-item">
-            <button
-              type="button"
-              className={`nav-link rounded-pill fw-semibold ${activeView === 'playground' ? 'active' : ''}`}
-              onClick={() => setActiveView('playground')}
-            >
-              ⚡ Interactive MCP Console
-            </button>
-          </li>
-          <li className="nav-item">
-            <button
-              type="button"
-              className={`nav-link rounded-pill fw-semibold ${activeView === 'audit' ? 'active' : ''}`}
-              onClick={() => setActiveView('audit')}
-            >
-              🛡️ Shard &amp; Spend Audit ({auditLogs.length})
-            </button>
-          </li>
-          <li className="nav-item">
-            <button
-              type="button"
-              className={`nav-link rounded-pill fw-semibold ${activeView === 'connect' ? 'active' : ''}`}
-              onClick={() => setActiveView('connect')}
-            >
-              🔌 Connect Claude / Cursor / Bot
-            </button>
-          </li>
-        </ul>
+        <div className="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">
+          <ul className="nav nav-pills flex-wrap gap-2 mb-0">
+            <li className="nav-item">
+              <button
+                type="button"
+                className={`nav-link rounded-pill fw-semibold ${activeView === 'keys' ? 'active' : ''}`}
+                onClick={() => switchView('keys')}
+              >
+                🔑 Keys, Pools &amp; Soft Quotas ({tokens.length}){' '}
+                <kbd className="ms-1 small opacity-75">1</kbd>
+              </button>
+            </li>
+            <li className="nav-item">
+              <button
+                type="button"
+                className={`nav-link rounded-pill fw-semibold ${activeView === 'personas' ? 'active' : ''}`}
+                onClick={() => switchView('personas')}
+              >
+                🎭 Autonomous Persona Studio ({personas.length}){' '}
+                <kbd className="ms-1 small opacity-75">2</kbd>
+              </button>
+            </li>
+            <li className="nav-item">
+              <button
+                type="button"
+                className={`nav-link rounded-pill fw-semibold ${activeView === 'shards' ? 'active' : ''}`}
+                onClick={() => switchView('shards')}
+              >
+                🌐 16-Shard &amp; PostgreSQL Telemetry{' '}
+                <kbd className="ms-1 small opacity-75">3</kbd>
+              </button>
+            </li>
+            <li className="nav-item">
+              <button
+                type="button"
+                className={`nav-link rounded-pill fw-semibold ${activeView === 'playground' ? 'active' : ''}`}
+                onClick={() => switchView('playground')}
+              >
+                ⚡ Interactive MCP &amp; Swarm Console{' '}
+                <kbd className="ms-1 small opacity-75">4</kbd>
+              </button>
+            </li>
+            <li className="nav-item">
+              <button
+                type="button"
+                className={`nav-link rounded-pill fw-semibold ${activeView === 'audit' ? 'active' : ''}`}
+                onClick={() => switchView('audit')}
+              >
+                🛡️ Shard &amp; Spend Audit ({auditLogs.length}){' '}
+                <kbd className="ms-1 small opacity-75">5</kbd>
+              </button>
+            </li>
+            <li className="nav-item">
+              <button
+                type="button"
+                className={`nav-link rounded-pill fw-semibold ${activeView === 'connect' ? 'active' : ''}`}
+                onClick={() => switchView('connect')}
+              >
+                🔌 Connect Claude / Cursor / Bot{' '}
+                <kbd className="ms-1 small opacity-75">6</kbd>
+              </button>
+            </li>
+          </ul>
+          <span className="small text-muted d-none d-xl-inline">
+            Tip: Press <kbd>1</kbd>–<kbd>6</kbd> to switch views
+          </span>
+        </div>
 
         {/* VIEW 1: AGENT KEYS, RELAY POOLS & SOFT QUOTA BUCKETS */}
         {activeView === 'keys' && (
@@ -1107,29 +1377,46 @@ function AgentsHubContent() {
             <div className="col-lg-7">
               <div className="card rounded-4 border shadow-sm mb-4">
                 <div className="card-body p-4">
-                  <div className="d-flex justify-content-between align-items-center mb-3">
-                    <h5 className="fw-bold mb-0">
-                      Active Persona Residencies ({personas.length})
-                    </h5>
-                    <div className="d-flex gap-2">
-                      {personas.map((p) => (
-                        <button
-                          key={p.id}
-                          type="button"
-                          className={`btn btn-sm rounded-pill ${
-                            selectedPersona?.id === p.id ? 'btn-dark' : 'btn-outline-secondary'
-                          }`}
-                          onClick={() => setSelectedPersonaId(p.id)}
-                        >
-                          @{p.handle}
-                        </button>
-                      ))}
+                  <div className="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+                    <div>
+                      <h5 className="fw-bold mb-0">
+                        Active Persona Residencies ({personas.length})
+                      </h5>
+                      <div className="small text-muted">
+                        Multi-persona residency with optimistic concurrency &amp; cross-persona work attribution guardrails.
+                      </div>
                     </div>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-outline-primary rounded-pill fw-semibold"
+                      disabled={bootstrappingRoster || !user}
+                      onClick={handleBootstrapRoster}
+                    >
+                      {bootstrappingRoster
+                        ? 'Syncing Roster...'
+                        : '🚀 Bootstrap Commissioned Studio Roster (Mika, Ren, Sora, Nagi)'}
+                    </button>
+                  </div>
+
+                  <div className="d-flex flex-wrap gap-2 mb-3">
+                    {personas.map((p) => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        className={`btn btn-sm rounded-pill ${
+                          selectedPersona?.id === p.id ? 'btn-dark' : 'btn-outline-secondary'
+                        }`}
+                        onClick={() => setSelectedPersonaId(p.id)}
+                      >
+                        @{p.handle}
+                      </button>
+                    ))}
                   </div>
 
                   {!selectedPersona ? (
                     <div className="text-center py-4 text-muted">
-                      No autonomous personas provisioned yet.
+                      No autonomous personas provisioned yet. Click{' '}
+                      <strong>Bootstrap Commissioned Studio Roster</strong> above to install Mika, Ren, Sora, and Nagi!
                     </div>
                   ) : (
                     <div>
@@ -1211,6 +1498,112 @@ function AgentsHubContent() {
                         )}
                       </div>
 
+                      {/* Record Continuity Activity Form */}
+                      <div className="p-3 rounded-4 border mb-3 bg-body-tertiary">
+                        <h6 className="fw-bold mb-1">
+                          📝 Record Persona Continuity Activity &amp; Character Attribution
+                        </h6>
+                        <p className="text-muted small mb-2">
+                          Log immutable creative drops, work IDs (protected against cross-persona attribution conflicts), and adult (18+) character provenance.
+                        </p>
+                        <div className="row g-2 mb-2">
+                          <div className="col-md-4">
+                            <label className="form-label small fw-semibold mb-1">Action Type</label>
+                            <select
+                              className="form-select form-select-sm"
+                              value={activityActionType}
+                              onChange={(e) => setActivityActionType(e.target.value)}
+                            >
+                              <option value="post_create">post_create</option>
+                              <option value="reel_create">reel_create</option>
+                              <option value="story_create">story_create</option>
+                              <option value="community_poll">community_poll</option>
+                              <option value="vip_broadcast">vip_broadcast</option>
+                            </select>
+                          </div>
+                          <div className="col-md-8">
+                            <label className="form-label small fw-semibold mb-1">
+                              Work IDs (comma-separated, unique per persona)
+                            </label>
+                            <input
+                              type="text"
+                              className="form-control form-control-sm font-monospace"
+                              value={activityWorkIds}
+                              onChange={(e) => setActivityWorkIds(e.target.value)}
+                              placeholder="work-drop-2026-01, illust-set-a"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="row g-2 mb-2">
+                          <div className="col-md-4">
+                            <label className="form-label small fw-semibold mb-1">
+                              Character Name (Optional)
+                            </label>
+                            <input
+                              type="text"
+                              className="form-control form-control-sm"
+                              value={activityCharName}
+                              onChange={(e) => setActivityCharName(e.target.value)}
+                              placeholder="e.g. Kanon / 2B"
+                            />
+                          </div>
+                          <div className="col-md-3">
+                            <label className="form-label small fw-semibold mb-1">Origin</label>
+                            <select
+                              className="form-select form-select-sm"
+                              value={activityCharOrigin}
+                              onChange={(e) =>
+                                setActivityCharOrigin(e.target.value as 'original' | 'fan-art')
+                              }
+                            >
+                              <option value="original">original</option>
+                              <option value="fan-art">fan-art</option>
+                            </select>
+                          </div>
+                          <div className="col-md-3">
+                            <label className="form-label small fw-semibold mb-1">
+                              Source Franchise
+                            </label>
+                            <input
+                              type="text"
+                              className="form-control form-control-sm"
+                              value={activityCharSource}
+                              onChange={(e) => setActivityCharSource(e.target.value)}
+                              placeholder="Required if fan-art"
+                            />
+                          </div>
+                          <div className="col-md-2">
+                            <label className="form-label small fw-semibold mb-1">Age (18+)</label>
+                            <input
+                              type="number"
+                              min="18"
+                              className="form-control form-control-sm"
+                              value={activityCharAge}
+                              onChange={(e) => setActivityCharAge(e.target.value)}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="input-group input-group-sm">
+                          <input
+                            type="text"
+                            className="form-control"
+                            value={activityDescription}
+                            onChange={(e) => setActivityDescription(e.target.value)}
+                            placeholder="Describe the published work, lighting study, or fan interaction..."
+                          />
+                          <button
+                            type="button"
+                            className="btn btn-primary fw-semibold"
+                            disabled={recordingActivity || !activityDescription.trim()}
+                            onClick={() => handleRecordActivity(selectedPersona)}
+                          >
+                            {recordingActivity ? 'Recording...' : '+ Record Activity'}
+                          </button>
+                        </div>
+                      </div>
+
                       {/* Recorded Continuity Ledger */}
                       <div>
                         <h6 className="fw-bold small text-uppercase text-muted mb-2">
@@ -1220,14 +1613,34 @@ function AgentsHubContent() {
                           {(selectedPersona.activities || []).map((act) => (
                             <div
                               key={act.id}
-                              className="p-2 rounded-3 bg-body-tertiary border small d-flex justify-content-between align-items-center"
+                              className="p-2 rounded-3 bg-body-tertiary border small d-flex flex-wrap justify-content-between align-items-center gap-2"
                             >
                               <div>
-                                <span className="badge bg-secondary me-2">
-                                  Rev #{act.practice_revision}
-                                </span>
-                                <code className="me-2">{act.action_type}</code>
-                                <span>{act.description}</span>
+                                <div className="d-flex flex-wrap align-items-center gap-1 mb-1">
+                                  <span className="badge bg-secondary">
+                                    Rev #{act.practice_revision}
+                                  </span>
+                                  <code>{act.action_type}</code>
+                                  {(act.work_ids || []).map((wid) => (
+                                    <span
+                                      key={wid}
+                                      className="badge bg-primary-subtle text-primary border border-primary-subtle font-monospace"
+                                    >
+                                      work:{wid}
+                                    </span>
+                                  ))}
+                                  {(act.characters || []).map((ch, idx) => (
+                                    <span
+                                      key={`${ch.name}-${idx}`}
+                                      className="badge bg-warning-subtle text-dark border border-warning-subtle"
+                                    >
+                                      🎭 {ch.name} ({ch.origin}
+                                      {ch.age ? `, ${ch.age}y` : ''}
+                                      {ch.source ? ` · ${ch.source}` : ''})
+                                    </span>
+                                  ))}
+                                </div>
+                                <div>{act.description}</div>
                               </div>
                               <span className="text-muted text-nowrap ms-2" style={{ fontSize: '0.72rem' }}>
                                 {act.occurred_at}
@@ -1259,9 +1672,14 @@ function AgentsHubContent() {
                         Consistent FNV-1a 64-bit hashing isolates autonomous agent activity across 16 virtual shards and 3 pool tiers so bursty agents smoothly self-pace without causing database lock contention.
                       </p>
                     </div>
-                    <span className="badge bg-success-subtle text-success border border-success-subtle px-3 py-2 rounded-pill">
-                      Engine: {shardTelemetry?.database_engine || 'postgresql_pooled_sharded'}
-                    </span>
+                    <div className="d-flex flex-wrap align-items-center gap-2">
+                      <span className="badge bg-primary-subtle text-primary border border-primary-subtle px-3 py-2 rounded-pill">
+                        Populated Shards: {shardTelemetry?.cluster_summary?.populated_shards ?? shardsList.filter((s) => s.active_agents > 0 || s.active_personas > 0).length} / 16
+                      </span>
+                      <span className="badge bg-success-subtle text-success border border-success-subtle px-3 py-2 rounded-pill">
+                        Engine: {shardTelemetry?.database_engine || 'postgresql_pooled_sharded'}
+                      </span>
+                    </div>
                   </div>
 
                   {/* Pool Tier Policy Cards */}
@@ -1287,6 +1705,11 @@ function AgentsHubContent() {
                               <span className="badge bg-secondary-subtle text-body">
                                 Max Concurrency: {pool.max_concurrency}
                               </span>
+                              {typeof pool.active_tokens === 'number' && (
+                                <span className="badge bg-primary-subtle text-primary">
+                                  Active Keys: {pool.active_tokens} · Personas: {pool.active_personas || 0}
+                                </span>
+                              )}
                             </div>
                           )}
                         </div>
@@ -1294,12 +1717,30 @@ function AgentsHubContent() {
                     ))}
                   </div>
 
-                  {/* 16-Shard Grid */}
-                  <h6 className="fw-bold small text-uppercase text-muted mb-2">
-                    Live 16-Shard Partition Grid (Shard #00 — Shard #15)
-                  </h6>
+                  {/* 16-Shard Grid Filter & Header */}
+                  <div className="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                    <h6 className="fw-bold small text-uppercase text-muted mb-0">
+                      Live 16-Shard Partition Grid (Shard #00 — Shard #15)
+                    </h6>
+                    <div className="btn-group btn-group-sm">
+                      {['all', 'central', 'premium', 'studio'].map((tier) => (
+                        <button
+                          key={tier}
+                          type="button"
+                          className={`btn ${
+                            shardPoolFilter === tier ? 'btn-dark' : 'btn-outline-secondary'
+                          }`}
+                          onClick={() => setShardPoolFilter(tier)}
+                        >
+                          {tier === 'all' ? 'All Shards (16)' : `${tier.toUpperCase()} Pool`}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                   <div className="row g-2">
-                    {shardsList.map((sh) => (
+                    {shardsList
+                      .filter((sh) => shardPoolFilter === 'all' || sh.pool_tier === shardPoolFilter)
+                      .map((sh) => (
                       <div key={sh.shard_id} className="col-6 col-sm-4 col-md-3">
                         <div className="p-3 rounded-4 border bg-body h-100">
                           <div className="d-flex justify-content-between align-items-center mb-1">
@@ -1339,129 +1780,331 @@ function AgentsHubContent() {
           </div>
         )}
 
-        {/* VIEW 4: INTERACTIVE MCP TOOL CONSOLE */}
+        {/* VIEW 4: INTERACTIVE MCP TOOL CONSOLE & SWARM BATCH PIPELINE RUNNER */}
         {activeView === 'playground' && (
-          <div className="row g-4">
-            <div className="col-lg-6">
-              <div className="card rounded-4 border shadow-sm">
-                <div className="card-body p-4">
-                  <div className="d-flex justify-content-between align-items-center mb-3">
-                    <h5 className="fw-bold mb-0">⚡ Autonomous MCP Tool Runner</h5>
-                    <div className="btn-group btn-group-sm">
-                      <button
-                        type="button"
-                        className={`btn ${
-                          rpcMode === 'jsonrpc' ? 'btn-primary' : 'btn-outline-secondary'
-                        }`}
-                        onClick={() => setRpcMode('jsonrpc')}
-                      >
-                        JSON-RPC 2.0 (/api/mcp)
-                      </button>
-                      <button
-                        type="button"
-                        className={`btn ${
-                          rpcMode === 'rest' ? 'btn-primary' : 'btn-outline-secondary'
-                        }`}
-                        onClick={() => setRpcMode('rest')}
-                      >
-                        REST (/api/mcp/tools/:name)
-                      </button>
-                    </div>
-                  </div>
+          <div>
+            <div className="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+              <div className="btn-group">
+                <button
+                  type="button"
+                  className={`btn btn-sm rounded-pill px-3 me-2 fw-semibold ${
+                    consoleMode === 'single' ? 'btn-dark' : 'btn-outline-secondary'
+                  }`}
+                  onClick={() => setConsoleMode('single')}
+                >
+                  ⚡ Single MCP Tool Runner
+                </button>
+                <button
+                  type="button"
+                  className={`btn btn-sm rounded-pill px-3 fw-semibold ${
+                    consoleMode === 'batch' ? 'btn-dark' : 'btn-outline-secondary'
+                  }`}
+                  onClick={() => setConsoleMode('batch')}
+                >
+                  🐝 Swarm Batch Pipeline Runner (POST /api/agent/swarm/batch)
+                </button>
+              </div>
+              <span className="small text-muted">
+                Responses include <code>X-Heav3ns-Shard</code>, <code>X-Heav3ns-Pool</code>, and{' '}
+                <code>X-RateLimit-Throttle-Mode</code> headers
+              </span>
+            </div>
 
-                  <div className="mb-3">
-                    <label className="form-label small fw-semibold">Quick Preset Templates</label>
-                    <div className="d-flex flex-wrap gap-1">
-                      {Object.keys(SAMPLE_TOOL_TEMPLATES).map((k) => (
-                        <button
-                          key={k}
-                          type="button"
-                          className={`btn btn-sm rounded-pill ${
-                            selectedTool === k ? 'btn-dark' : 'btn-outline-secondary'
-                          }`}
-                          onClick={() => handleSelectTemplate(k)}
+            {consoleMode === 'single' ? (
+              <div className="row g-4">
+                <div className="col-lg-6">
+                  <div className="card rounded-4 border shadow-sm">
+                    <div className="card-body p-4">
+                      <div className="d-flex justify-content-between align-items-center mb-3">
+                        <h5 className="fw-bold mb-0">⚡ Autonomous MCP Tool Runner</h5>
+                        <div className="btn-group btn-group-sm">
+                          <button
+                            type="button"
+                            className={`btn ${
+                              rpcMode === 'jsonrpc' ? 'btn-primary' : 'btn-outline-secondary'
+                            }`}
+                            onClick={() => setRpcMode('jsonrpc')}
+                          >
+                            JSON-RPC 2.0 (/api/mcp)
+                          </button>
+                          <button
+                            type="button"
+                            className={`btn ${
+                              rpcMode === 'rest' ? 'btn-primary' : 'btn-outline-secondary'
+                            }`}
+                            onClick={() => setRpcMode('rest')}
+                          >
+                            REST (/api/mcp/tools/:name)
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="mb-3">
+                        <label className="form-label small fw-semibold">Quick Preset Templates</label>
+                        <div className="d-flex flex-wrap gap-1">
+                          {Object.keys(SAMPLE_TOOL_TEMPLATES).map((k) => (
+                            <button
+                              key={k}
+                              type="button"
+                              className={`btn btn-sm rounded-pill ${
+                                selectedTool === k ? 'btn-dark' : 'btn-outline-secondary'
+                              }`}
+                              onClick={() => handleSelectTemplate(k)}
+                            >
+                              {k}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="mb-3">
+                        <label className="form-label small fw-semibold">
+                          Select MCP Tool ({manifest?.tools?.length || 34} Available)
+                        </label>
+                        <select
+                          className="form-select font-monospace small"
+                          value={selectedTool}
+                          onChange={(e) => handleSelectTemplate(e.target.value)}
                         >
-                          {k}
-                        </button>
-                      ))}
+                          {(
+                            manifest?.tools ||
+                            Object.keys(SAMPLE_TOOL_TEMPLATES).map((name) => ({ name }))
+                          ).map((t: any) => (
+                            <option key={t.name} value={t.name}>
+                              {t.name} {t.scope ? `[scope: ${t.scope}]` : ''} — {t.category || ''}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="mb-3">
+                        <label className="form-label small fw-semibold">
+                          Optional Override <code>X-Agent-Token</code> (leave blank to use current session)
+                        </label>
+                        <input
+                          type="text"
+                          className="form-control form-control-sm font-monospace"
+                          placeholder="hp_mcp_..."
+                          value={customTokenHeader}
+                          onChange={(e) => setCustomTokenHeader(e.target.value)}
+                        />
+                      </div>
+
+                      <div className="mb-3">
+                        <label className="form-label small fw-semibold">Tool Arguments (JSON)</label>
+                        <textarea
+                          className="form-control font-monospace small"
+                          rows={9}
+                          value={toolArgsText}
+                          onChange={(e) => setToolArgsText(e.target.value)}
+                        />
+                      </div>
+
+                      <button
+                        type="button"
+                        className="btn btn-primary w-100 rounded-pill fw-semibold"
+                        onClick={handleExecuteTool}
+                        disabled={toolRunning}
+                      >
+                        {toolRunning
+                          ? 'Executing MCP Tool...'
+                          : `▶ Run ${selectedTool} via ${rpcMode === 'jsonrpc' ? 'JSON-RPC 2.0' : 'REST'}`}
+                      </button>
                     </div>
                   </div>
+                </div>
 
-                  <div className="mb-3">
-                    <label className="form-label small fw-semibold">
-                      Select MCP Tool ({manifest?.tools?.length || 34} Available)
-                    </label>
-                    <select
-                      className="form-select font-monospace small"
-                      value={selectedTool}
-                      onChange={(e) => handleSelectTemplate(e.target.value)}
-                    >
-                      {(
-                        manifest?.tools ||
-                        Object.keys(SAMPLE_TOOL_TEMPLATES).map((name) => ({ name }))
-                      ).map((t: any) => (
-                        <option key={t.name} value={t.name}>
-                          {t.name} {t.scope ? `[scope: ${t.scope}]` : ''} — {t.category || ''}
-                        </option>
-                      ))}
-                    </select>
+                <div className="col-lg-6">
+                  <div className="card rounded-4 border shadow-sm h-100">
+                    <div className="card-body p-4 d-flex flex-column">
+                      <h5 className="fw-bold mb-2">Structured Response &amp; Soft Quota Governance</h5>
+                      <p className="text-muted small mb-3">
+                        Every tool response includes <code>_quota_governance</code> with shard routing, burst token reserves, and adaptive pacing telemetry.
+                      </p>
+                      <pre
+                        className="bg-dark text-light p-3 rounded-4 flex-fill small overflow-auto mb-0"
+                        style={{ maxHeight: '460px' }}
+                      >
+                        {toolOutput
+                          ? JSON.stringify(toolOutput, null, 2)
+                          : '// Click "Run" to execute the selected MCP tool and inspect its live JSON-RPC 2.0 / REST payload and _quota_governance telemetry.'}
+                      </pre>
+                    </div>
                   </div>
-
-                  <div className="mb-3">
-                    <label className="form-label small fw-semibold">
-                      Optional Override <code>X-Agent-Token</code> (leave blank to use current session)
-                    </label>
-                    <input
-                      type="text"
-                      className="form-control form-control-sm font-monospace"
-                      placeholder="hp_mcp_..."
-                      value={customTokenHeader}
-                      onChange={(e) => setCustomTokenHeader(e.target.value)}
-                    />
-                  </div>
-
-                  <div className="mb-3">
-                    <label className="form-label small fw-semibold">Tool Arguments (JSON)</label>
-                    <textarea
-                      className="form-control font-monospace small"
-                      rows={9}
-                      value={toolArgsText}
-                      onChange={(e) => setToolArgsText(e.target.value)}
-                    />
-                  </div>
-
-                  <button
-                    type="button"
-                    className="btn btn-primary w-100 rounded-pill fw-semibold"
-                    onClick={handleExecuteTool}
-                    disabled={toolRunning}
-                  >
-                    {toolRunning
-                      ? 'Executing MCP Tool...'
-                      : `▶ Run ${selectedTool} via ${rpcMode === 'jsonrpc' ? 'JSON-RPC 2.0' : 'REST'}`}
-                  </button>
                 </div>
               </div>
-            </div>
+            ) : (
+              <div className="row g-4">
+                <div className="col-lg-6">
+                  <div className="card rounded-4 border shadow-sm">
+                    <div className="card-body p-4">
+                      <div className="d-flex justify-content-between align-items-center mb-2">
+                        <h5 className="fw-bold mb-0">🐝 Visual Swarm Batch Pipeline Builder</h5>
+                        <div className="form-check form-switch mb-0">
+                          <input
+                            className="form-check-input"
+                            type="checkbox"
+                            id="batchStopOnError"
+                            checked={batchStopOnError}
+                            onChange={(e) => setBatchStopOnError(e.target.checked)}
+                          />
+                          <label className="form-check-label small" htmlFor="batchStopOnError">
+                            Stop on first error
+                          </label>
+                        </div>
+                      </div>
+                      <p className="text-muted small mb-3">
+                        Chain up to 25 autonomous agent tool actions in a single sharded pipeline (<code>POST /api/agent/swarm/batch</code>) with per-step GCRA soft quota pacing and canonical JSON idempotency keys.
+                      </p>
 
-            <div className="col-lg-6">
-              <div className="card rounded-4 border shadow-sm h-100">
-                <div className="card-body p-4 d-flex flex-column">
-                  <h5 className="fw-bold mb-2">Structured Response &amp; Soft Quota Governance</h5>
-                  <p className="text-muted small mb-3">
-                    Every tool response includes <code>_quota_governance</code> with shard routing, burst token reserves, and adaptive pacing telemetry.
-                  </p>
-                  <pre
-                    className="bg-dark text-light p-3 rounded-4 flex-fill small overflow-auto mb-0"
-                    style={{ maxHeight: '460px' }}
-                  >
-                    {toolOutput
-                      ? JSON.stringify(toolOutput, null, 2)
-                      : '// Click "Run" to execute the selected MCP tool and inspect its live JSON-RPC 2.0 / REST payload and _quota_governance telemetry.'}
-                  </pre>
+                      <div className="d-flex flex-column gap-2 mb-3">
+                        {batchSteps.map((step, idx) => (
+                          <div key={idx} className="p-2 rounded-3 border bg-body-tertiary">
+                            <div className="d-flex justify-content-between align-items-center mb-1">
+                              <span className="badge bg-dark">Step #{idx + 1}</span>
+                              {batchSteps.length > 1 && (
+                                <button
+                                  type="button"
+                                  className="btn btn-sm btn-link text-danger p-0"
+                                  onClick={() =>
+                                    setBatchSteps((prev) => prev.filter((_, i) => i !== idx))
+                                  }
+                                >
+                                  Remove
+                                </button>
+                              )}
+                            </div>
+                            <div className="row g-2 mb-1">
+                              <div className="col-7">
+                                <input
+                                  type="text"
+                                  className="form-control form-control-sm font-monospace"
+                                  value={step.tool_name}
+                                  onChange={(e) =>
+                                    setBatchSteps((prev) =>
+                                      prev.map((s, i) =>
+                                        i === idx ? { ...s, tool_name: e.target.value } : s
+                                      )
+                                    )
+                                  }
+                                  placeholder="tool_name (e.g. feed_read)"
+                                />
+                              </div>
+                              <div className="col-5">
+                                <input
+                                  type="text"
+                                  className="form-control form-control-sm font-monospace"
+                                  value={step.idempotency_key}
+                                  onChange={(e) =>
+                                    setBatchSteps((prev) =>
+                                      prev.map((s, i) =>
+                                        i === idx ? { ...s, idempotency_key: e.target.value } : s
+                                      )
+                                    )
+                                  }
+                                  placeholder="idempotency_key (opt)"
+                                />
+                              </div>
+                            </div>
+                            <textarea
+                              className="form-control form-control-sm font-monospace"
+                              rows={2}
+                              value={step.argumentsText}
+                              onChange={(e) =>
+                                setBatchSteps((prev) =>
+                                  prev.map((s, i) =>
+                                    i === idx ? { ...s, argumentsText: e.target.value } : s
+                                  )
+                                )
+                              }
+                              placeholder='{"limit": 2}'
+                            />
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="d-flex gap-2">
+                        <button
+                          type="button"
+                          className="btn btn-outline-secondary rounded-pill btn-sm fw-semibold"
+                          disabled={batchSteps.length >= 25}
+                          onClick={() =>
+                            setBatchSteps((prev) => [
+                              ...prev,
+                              { tool_name: 'account_whoami', argumentsText: '{}', idempotency_key: '' },
+                            ])
+                          }
+                        >
+                          + Add Pipeline Step
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-primary rounded-pill flex-fill fw-semibold"
+                          disabled={batchRunning || batchSteps.length === 0}
+                          onClick={handleExecuteBatch}
+                        >
+                          {batchRunning
+                            ? 'Executing Sharded Swarm Batch...'
+                            : `▶ Execute ${batchSteps.length}-Step Swarm Batch Pipeline`}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="col-lg-6">
+                  <div className="card rounded-4 border shadow-sm h-100">
+                    <div className="card-body p-4 d-flex flex-column">
+                      <h5 className="fw-bold mb-2">
+                        Swarm Pipeline Telemetry &amp; Per-Step Shard Routing
+                      </h5>
+                      {batchResult?.results && Array.isArray(batchResult.results) && (
+                        <div className="d-flex flex-column gap-2 mb-3">
+                          {batchResult.results.map((r: any, idx: number) => (
+                            <div
+                              key={idx}
+                              className="p-2 rounded-3 border bg-body-tertiary d-flex flex-wrap justify-content-between align-items-center small"
+                            >
+                              <div>
+                                <span
+                                  className={`badge me-2 ${
+                                    r.success ? 'bg-success' : 'bg-danger'
+                                  }`}
+                                >
+                                  {r.success ? 'PASS' : 'FAIL'}
+                                </span>
+                                <code className="fw-bold me-2">{r.tool_name || r.tool}</code>
+                              </div>
+                              <div className="d-flex gap-1 align-items-center">
+                                {r.shard_id !== undefined && r.shard_id !== null && (
+                                  <span className="badge bg-dark">Shard #{r.shard_id}</span>
+                                )}
+                                {r.pool_tier && (
+                                  <span className="badge bg-info text-dark text-uppercase">
+                                    {r.pool_tier}
+                                  </span>
+                                )}
+                                <span className="badge bg-secondary">
+                                  {r.pacing_delay_ms || 0}ms pace
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <pre
+                        className="bg-dark text-light p-3 rounded-4 flex-fill small overflow-auto mb-0"
+                        style={{ maxHeight: '380px' }}
+                      >
+                        {batchResult
+                          ? JSON.stringify(batchResult, null, 2)
+                          : '// Build a multi-step pipeline on the left and click "Execute" to inspect per-step shard routing, GCRA pacing, and live cluster telemetry_snapshot.'}
+                      </pre>
+                    </div>
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
           </div>
         )}
 
@@ -1469,10 +2112,10 @@ function AgentsHubContent() {
         {activeView === 'audit' && (
           <div className="card rounded-4 border shadow-sm">
             <div className="card-body p-4">
-              <div className="d-flex justify-content-between align-items-center mb-3">
+              <div className="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
                 <div>
                   <h5 className="fw-bold mb-0">
-                    🛡️ Autonomous Agent Activity, Shard Routing &amp; Spend Ledger
+                    🛡️ Autonomous Agent Activity, Shard Routing &amp; Spend Ledger ({filteredAuditLogs.length})
                   </h5>
                   <p className="text-muted small mb-0">
                     Immutable trace of every MCP tool invocation, virtual shard assignment, soft pacing delay, and wallet spend.
@@ -1487,9 +2130,61 @@ function AgentsHubContent() {
                 </button>
               </div>
 
-              {auditLogs.length === 0 ? (
+              {/* Search & Filter Controls */}
+              <div className="row g-2 mb-3 p-2 rounded-3 bg-body-tertiary border">
+                <div className="col-md-4">
+                  <input
+                    type="text"
+                    className="form-control form-control-sm"
+                    placeholder="Search tool name, agent, or details..."
+                    value={auditSearch}
+                    onChange={(e) => setAuditSearch(e.target.value)}
+                  />
+                </div>
+                <div className="col-md-3">
+                  <select
+                    className="form-select form-select-sm"
+                    value={auditShardFilter}
+                    onChange={(e) => setAuditShardFilter(e.target.value)}
+                  >
+                    <option value="all">All Shards (#00–#15)</option>
+                    {Array.from({ length: 16 }, (_, i) => (
+                      <option key={i} value={String(i)}>
+                        Shard #{String(i).padStart(2, '0')}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="col-md-2">
+                  <select
+                    className="form-select form-select-sm"
+                    value={auditPoolFilter}
+                    onChange={(e) => setAuditPoolFilter(e.target.value)}
+                  >
+                    <option value="all">All Relay Pools</option>
+                    <option value="central">Central Pool</option>
+                    <option value="premium">Premium Pool</option>
+                    <option value="studio">Studio Pool</option>
+                  </select>
+                </div>
+                <div className="col-md-3">
+                  <select
+                    className="form-select form-select-sm"
+                    value={auditModeFilter}
+                    onChange={(e) => setAuditModeFilter(e.target.value)}
+                  >
+                    <option value="all">All Throttle Modes</option>
+                    <option value="smooth">smooth</option>
+                    <option value="soft_paced">soft_paced</option>
+                    <option value="cooldown_advisory">cooldown_advisory</option>
+                    <option value="idempotent_replay">idempotent_replay</option>
+                  </select>
+                </div>
+              </div>
+
+              {filteredAuditLogs.length === 0 ? (
                 <div className="text-center py-5 text-muted">
-                  No autonomous actions recorded yet. Run a tool in the MCP Console to see real-time telemetry!
+                  No autonomous actions match the current filters.
                 </div>
               ) : (
                 <div className="table-responsive">
@@ -1507,7 +2202,7 @@ function AgentsHubContent() {
                       </tr>
                     </thead>
                     <tbody>
-                      {auditLogs.map((log) => (
+                      {filteredAuditLogs.map((log) => (
                         <tr key={log.id}>
                           <td className="text-nowrap text-muted">{log.created_at}</td>
                           <td>

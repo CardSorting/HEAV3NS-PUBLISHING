@@ -78,34 +78,51 @@ pub async fn create_story(
     Json(payload): Json<CreateStoryPayload>,
 ) -> Result<impl IntoResponse, AppError> {
     auth.require_scope("write")?;
-    let conn = state.lock_db();
-    let murl = payload.media_url.unwrap_or_default().trim().to_string();
-    let mtype = payload.media_type.unwrap_or_else(|| {
-        if murl.ends_with(".mp4") || murl.ends_with(".webm") {
-            "video".into()
-        } else if murl.is_empty() {
-            "text".into()
+    let quota_dec = crate::sharding::enforce_agent_rest_quota(&state, &auth, "story_create").await?;
+    let res: Result<serde_json::Value, AppError> = (|| {
+        let conn = state.lock_db();
+        let murl = payload.media_url.unwrap_or_default().trim().to_string();
+        let mtype = payload.media_type.unwrap_or_else(|| {
+            if murl.ends_with(".mp4") || murl.ends_with(".webm") {
+                "video".into()
+            } else if murl.is_empty() {
+                "text".into()
+            } else {
+                "image".into()
+            }
+        });
+        let preset = payload
+            .bg_preset
+            .unwrap_or_else(|| "gradient-purple".into());
+        let highlight = if payload.is_highlight.unwrap_or(false) {
+            1
         } else {
-            "image".into()
-        }
-    });
-    let preset = payload
-        .bg_preset
-        .unwrap_or_else(|| "gradient-purple".into());
-    let highlight = if payload.is_highlight.unwrap_or(false) {
-        1
-    } else {
-        0
-    };
-    conn.execute(
-        "INSERT INTO stories (user_id, media_url, media_type, caption, bg_preset, is_highlight, expires_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now', '+24 hours'))",
-        params![auth.user_id, murl, mtype, payload.caption.trim(), preset, highlight],
-    )?;
-    Ok(Json(json!({
-        "success": true,
-        "story_id": conn.last_insert_rowid()
-    })))
+            0
+        };
+        conn.execute(
+            "INSERT INTO stories (user_id, media_url, media_type, caption, bg_preset, is_highlight, expires_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now', '+24 hours'))",
+            params![auth.user_id, murl, mtype, payload.caption.trim(), preset, highlight],
+        )?;
+        let sid = conn.last_insert_rowid();
+        crate::sharding::record_agent_rest_audit(
+            &conn,
+            &auth,
+            quota_dec.as_ref(),
+            "story",
+            Some(sid.to_string()),
+            0.0,
+            json!({ "action": "create_story", "is_highlight": highlight != 0 }),
+        );
+        Ok(json!({
+            "success": true,
+            "story_id": sid
+        }))
+    })();
+    if res.is_err() {
+        crate::sharding::refund_agent_rest_quota(&state, &auth, quota_dec.as_ref());
+    }
+    res.map(Json)
 }
 
 pub async fn increment_story_view(
@@ -139,24 +156,40 @@ pub async fn toggle_story_highlight(
     Path(story_id): Path<i64>,
 ) -> Result<impl IntoResponse, AppError> {
     auth.require_scope("write")?;
-    let conn = state.lock_db();
-    let (owner_id, current_hl): (i64, i64) = conn.query_row(
-        "SELECT user_id, is_highlight FROM stories WHERE id = ?1",
-        params![story_id],
-        |r| Ok((r.get(0)?, r.get(1)?)),
-    )?;
-    if owner_id != auth.user_id && auth.role_id != 1 {
-        return Err(AppError::Forbidden("Only the story owner can toggle highlight.".into()));
+    let quota_dec = crate::sharding::enforce_agent_rest_quota(&state, &auth, "story_create").await?;
+    let res: Result<serde_json::Value, AppError> = (|| {
+        let conn = state.lock_db();
+        let (owner_id, current_hl): (i64, i64) = conn.query_row(
+            "SELECT user_id, is_highlight FROM stories WHERE id = ?1",
+            params![story_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        if owner_id != auth.user_id && auth.role_id != 1 {
+            return Err(AppError::Forbidden("Only the story owner can toggle highlight.".into()));
+        }
+        let next_hl = if current_hl == 0 { 1 } else { 0 };
+        conn.execute(
+            "UPDATE stories SET is_highlight = ?1 WHERE id = ?2",
+            params![next_hl, story_id],
+        )?;
+        crate::sharding::record_agent_rest_audit(
+            &conn,
+            &auth,
+            quota_dec.as_ref(),
+            "story",
+            Some(story_id.to_string()),
+            0.0,
+            json!({ "action": "toggle_highlight", "is_highlight": next_hl != 0 }),
+        );
+        Ok(json!({
+            "success": true,
+            "is_highlight": next_hl != 0
+        }))
+    })();
+    if res.is_err() {
+        crate::sharding::refund_agent_rest_quota(&state, &auth, quota_dec.as_ref());
     }
-    let next_hl = if current_hl == 0 { 1 } else { 0 };
-    conn.execute(
-        "UPDATE stories SET is_highlight = ?1 WHERE id = ?2",
-        params![next_hl, story_id],
-    )?;
-    Ok(Json(json!({
-        "success": true,
-        "is_highlight": next_hl != 0
-    })))
+    res.map(Json)
 }
 
 pub async fn delete_story(
@@ -165,16 +198,32 @@ pub async fn delete_story(
     Path(story_id): Path<i64>,
 ) -> Result<impl IntoResponse, AppError> {
     auth.require_scope("write")?;
-    let conn = state.lock_db();
-    let owner_id: i64 = conn.query_row(
-        "SELECT user_id FROM stories WHERE id = ?1",
-        params![story_id],
-        |r| r.get(0),
-    )?;
-    if owner_id != auth.user_id && auth.role_id != 1 {
-        return Err(AppError::Forbidden("Not authorized to delete this story.".into()));
+    let quota_dec = crate::sharding::enforce_agent_rest_quota(&state, &auth, "story_create").await?;
+    let res: Result<serde_json::Value, AppError> = (|| {
+        let conn = state.lock_db();
+        let owner_id: i64 = conn.query_row(
+            "SELECT user_id FROM stories WHERE id = ?1",
+            params![story_id],
+            |r| r.get(0),
+        )?;
+        if owner_id != auth.user_id && auth.role_id != 1 {
+            return Err(AppError::Forbidden("Not authorized to delete this story.".into()));
+        }
+        conn.execute("DELETE FROM stories WHERE id = ?1", params![story_id])?;
+        crate::sharding::record_agent_rest_audit(
+            &conn,
+            &auth,
+            quota_dec.as_ref(),
+            "story",
+            Some(story_id.to_string()),
+            0.0,
+            json!({ "action": "delete_story" }),
+        );
+        Ok(json!({ "success": true }))
+    })();
+    if res.is_err() {
+        crate::sharding::refund_agent_rest_quota(&state, &auth, quota_dec.as_ref());
     }
-    conn.execute("DELETE FROM stories WHERE id = ?1", params![story_id])?;
-    Ok(Json(json!({ "success": true })))
+    res.map(Json)
 }
 

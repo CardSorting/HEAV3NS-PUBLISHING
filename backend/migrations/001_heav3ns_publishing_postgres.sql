@@ -391,10 +391,15 @@ CREATE TABLE IF NOT EXISTS agent_action_idempotency (
     idempotency_key TEXT NOT NULL,
     user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     tool_name TEXT NOT NULL,
+    request_hash TEXT NOT NULL DEFAULT '',
     response_json TEXT NOT NULL,
+    updated_at_ms BIGINT NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')),
     PRIMARY KEY (user_id, idempotency_key)
 );
+
+ALTER TABLE agent_action_idempotency ADD COLUMN IF NOT EXISTS request_hash TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_action_idempotency ADD COLUMN IF NOT EXISTS updated_at_ms BIGINT NOT NULL DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS agent_personas (
     id TEXT PRIMARY KEY,

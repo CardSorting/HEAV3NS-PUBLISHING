@@ -195,7 +195,7 @@ pub async fn create_agent_token(
     );
     let prefix = format!("{}...", &raw_secret[..14.min(raw_secret.len())]);
     let token_hash = crate::auth::hash_agent_token(&raw_secret);
-    let shard_id = crate::sharding::compute_user_shard(auth.user_id, &prefix);
+    let shard_id = crate::sharding::compute_user_shard(auth.user_id, &raw_secret);
 
     let conn = state.lock_db();
     let expires_at: Option<String> = payload.expires_in_days.and_then(|days| {
